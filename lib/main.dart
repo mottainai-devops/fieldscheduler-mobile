@@ -1,10 +1,25 @@
-// FieldWorker v1.10 — placeholder entry point
-// Replace this file with the actual source code from your local Flutter project.
-// Push the full source to this repository to enable CI/CD builds.
-
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:go_router/go_router.dart';
 
-void main() {
+import 'providers/auth_provider.dart';
+import 'providers/route_provider.dart';
+import 'providers/notification_provider.dart';
+
+import 'screens/pin_login_screen.dart';
+import 'screens/worker_select_screen.dart';
+import 'screens/home_screen.dart';
+import 'screens/routes_screen.dart';
+import 'screens/route_detail_screen.dart';
+import 'screens/customer_detail_screen.dart';
+import 'screens/customer_notes_screen.dart';
+import 'screens/optimized_route_screen.dart';
+import 'screens/profile_screen.dart';
+import 'screens/notifications_screen.dart';
+import 'screens/report_violation_screen.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const FieldWorkerApp());
 }
 
@@ -13,21 +28,126 @@ class FieldWorkerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'FieldWorker',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1565C0)),
-        useMaterial3: true,
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider(create: (_) => RouteProvider()),
+        ChangeNotifierProvider(create: (_) => NotificationProvider()),
+      ],
+      child: Consumer<AuthProvider>(
+        builder: (context, auth, _) {
+          return MaterialApp.router(
+            title: 'FieldWorker',
+            debugShowCheckedModeBanner: false,
+            theme: ThemeData(
+              colorScheme: ColorScheme.fromSeed(
+                seedColor: const Color(0xFF1565C0),
+                brightness: Brightness.light,
+              ),
+              useMaterial3: true,
+              appBarTheme: const AppBarTheme(
+                backgroundColor: Color(0xFF1565C0),
+                foregroundColor: Colors.white,
+                elevation: 0,
+              ),
+              elevatedButtonTheme: ElevatedButtonThemeData(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1565C0),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+            routerConfig: _buildRouter(auth),
+          );
+        },
       ),
-      home: const Scaffold(
-        body: Center(
-          child: Text(
-            'FieldWorker\nSource code pending upload.',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 18),
-          ),
+    );
+  }
+
+  GoRouter _buildRouter(AuthProvider auth) {
+    return GoRouter(
+      initialLocation: '/login',
+      redirect: (context, state) {
+        final isLoggedIn = auth.isLoggedIn;
+        final isLoginPage = state.matchedLocation == '/login' ||
+            state.matchedLocation == '/select-worker';
+        if (!isLoggedIn && !isLoginPage) return '/login';
+        if (isLoggedIn && state.matchedLocation == '/login') return '/home';
+        return null;
+      },
+      routes: [
+        GoRoute(
+          path: '/login',
+          builder: (context, state) => const PinLoginScreen(),
         ),
-      ),
+        GoRoute(
+          path: '/select-worker',
+          builder: (context, state) => const WorkerSelectScreen(),
+        ),
+        GoRoute(
+          path: '/home',
+          builder: (context, state) => const HomeScreen(),
+        ),
+        GoRoute(
+          path: '/routes',
+          builder: (context, state) => const RoutesScreen(),
+        ),
+        GoRoute(
+          path: '/routes/:routeId',
+          builder: (context, state) {
+            final routeId = int.tryParse(state.pathParameters['routeId'] ?? '0') ?? 0;
+            return RouteDetailScreen(routeId: routeId);
+          },
+        ),
+        GoRoute(
+          path: '/routes/:routeId/optimize',
+          builder: (context, state) {
+            final routeId = int.tryParse(state.pathParameters['routeId'] ?? '0') ?? 0;
+            return OptimizedRouteScreen(routeId: routeId);
+          },
+        ),
+        GoRoute(
+          path: '/customers/:customerId',
+          builder: (context, state) {
+            final customerId = int.tryParse(state.pathParameters['customerId'] ?? '0') ?? 0;
+            final routeId = int.tryParse(state.uri.queryParameters['routeId'] ?? '0') ?? 0;
+            return CustomerDetailScreen(customerId: customerId, routeId: routeId);
+          },
+        ),
+        GoRoute(
+          path: '/customers/:customerId/notes',
+          builder: (context, state) {
+            final customerId = int.tryParse(state.pathParameters['customerId'] ?? '0') ?? 0;
+            final customerName = state.uri.queryParameters['name'] ?? 'Customer';
+            return CustomerNotesScreen(
+              customerId: customerId,
+              customerName: customerName,
+            );
+          },
+        ),
+        GoRoute(
+          path: '/customers/:customerId/report-violation',
+          builder: (context, state) {
+            final customerId = int.tryParse(state.pathParameters['customerId'] ?? '0') ?? 0;
+            final routeId = int.tryParse(state.uri.queryParameters['routeId'] ?? '0') ?? 0;
+            return ReportViolationScreen(
+              customerId: customerId,
+              routeId: routeId,
+            );
+          },
+        ),
+        GoRoute(
+          path: '/notifications',
+          builder: (context, state) => const NotificationsScreen(),
+        ),
+        GoRoute(
+          path: '/profile',
+          builder: (context, state) => const ProfileScreen(),
+        ),
+      ],
     );
   }
 }
