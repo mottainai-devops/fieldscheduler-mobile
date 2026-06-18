@@ -15,6 +15,9 @@ on:
         required: true
         default: '11'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build Release APK
