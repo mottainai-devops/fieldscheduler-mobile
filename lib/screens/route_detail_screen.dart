@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../utils/theme.dart';
 import 'customer_detail_screen.dart';
 import 'optimized_route_screen.dart';
 import 'report_violation_screen.dart';
+import 'pickup_submission_screen.dart';
 
 class RouteDetailScreen extends StatefulWidget {
   final int routeId;
@@ -29,6 +32,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
   String _searchQuery = '';
   bool _isOnline = true;
   final Set<int> _completedCustomerIds = {};
+  final Set<int> _pickedCustomerIds = {};
   bool _isCompletingRoute = false;
 
   @override
@@ -62,14 +66,16 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
       final route = results[0] as Map<String, dynamic>;
       final customers = results[1] as List<dynamic>;
 
-      // Pre-populate completedCustomerIds from server data
+      // Pre-populate completedCustomerIds and pickedCustomerIds from server data
       final completed = <int>{};
+      final picked = <int>{};
       for (final c in customers) {
-        if (c['completedAt'] != null) {
-          final raw = c['customerId'] ?? c['id'];
-          if (raw != null) {
-            final id = raw is int ? raw : int.tryParse(raw.toString()) ?? 0;
-            if (id > 0) completed.add(id);
+        final raw = c['customerId'] ?? c['id'];
+        if (raw != null) {
+          final id = raw is int ? raw : int.tryParse(raw.toString()) ?? 0;
+          if (id > 0) {
+            if (c['completedAt'] != null) completed.add(id);
+            if (c['pickedAt'] != null) picked.add(id);
           }
         }
       }
@@ -79,6 +85,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
           _route = route;
           _customers = customers;
           _completedCustomerIds.addAll(completed);
+          _pickedCustomerIds.addAll(picked);
           _isLoading = false;
         });
       }
@@ -291,6 +298,24 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _openPickupSubmission(Map<String, dynamic> customer) async {
+    final id = _extractCustomerId(customer);
+    if (id == 0) return;
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PickupSubmissionScreen(
+          routeId: widget.routeId,
+          customerId: id,
+          customer: customer,
+        ),
+      ),
+    );
+    if (result == true && mounted) {
+      setState(() => _pickedCustomerIds.add(id));
+    }
   }
 
   @override
@@ -547,62 +572,93 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
                   ),
                 ),
                 // Action buttons
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => CustomerDetailScreen(
-                                customerId: id,
-                                customerName: name,
-                                routeId: widget.routeId,
+                Builder(
+                  builder: (context) {
+                    final role = context.watch<AuthProvider>().workerRole ?? '';
+                    final isSupervisor = role == 'supervisor';
+                    final isPicked = _pickedCustomerIds.contains(id);
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => CustomerDetailScreen(
+                                    customerId: id,
+                                    customerName: name,
+                                    routeId: widget.routeId,
+                                  ),
+                                ),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.white,
+                                side: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                padding: const EdgeInsets.symmetric(vertical: 8),
+                              ),
+                              child: const Text('View Details', style: TextStyle(fontSize: 12)),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: hasGps ? () => _navigateToCustomer(customer) : null,
+                              icon: const Icon(Icons.navigation, size: 14),
+                              label: const Text('Navigate', style: TextStyle(fontSize: 12)),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: hasGps ? AppTheme.primaryColor : Colors.grey,
+                                side: BorderSide(
+                                  color: hasGps
+                                      ? AppTheme.primaryColor.withOpacity(0.6)
+                                      : Colors.grey.withOpacity(0.3),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 8),
                               ),
                             ),
                           ),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: BorderSide(color: Colors.white.withOpacity(0.3)),
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                          ),
-                          child: const Text('View Details', style: TextStyle(fontSize: 12)),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: hasGps ? () => _navigateToCustomer(customer) : null,
-                          icon: const Icon(Icons.navigation, size: 14),
-                          label: const Text('Navigate', style: TextStyle(fontSize: 12)),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: hasGps ? AppTheme.primaryColor : Colors.grey,
-                            side: BorderSide(
-                              color: hasGps
-                                  ? AppTheme.primaryColor.withOpacity(0.6)
-                                  : Colors.grey.withOpacity(0.3),
+                          const SizedBox(width: 6),
+                          if (!isSupervisor)
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () => _openReportViolation(customer),
+                                icon: const Icon(Icons.warning_amber, size: 14),
+                                label: const Text('Report', style: TextStyle(fontSize: 12)),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.orange,
+                                  side: BorderSide(color: Colors.orange.withOpacity(0.5)),
+                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                ),
+                              ),
+                            )
+                          else
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: isPicked ? null : () => _openPickupSubmission(customer),
+                                icon: Icon(
+                                  isPicked ? Icons.check_circle : Icons.local_shipping,
+                                  size: 14,
+                                ),
+                                label: Text(
+                                  isPicked ? 'Picked' : 'Pickup',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: isPicked ? Colors.green : Colors.orange,
+                                  side: BorderSide(
+                                    color: isPicked
+                                        ? Colors.green.withOpacity(0.5)
+                                        : Colors.orange.withOpacity(0.5),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                ),
+                              ),
                             ),
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                          ),
-                        ),
+                        ],
                       ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => _openReportViolation(customer),
-                          icon: const Icon(Icons.warning_amber, size: 14),
-                          label: const Text('Report', style: TextStyle(fontSize: 12)),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.orange,
-                            side: BorderSide(color: Colors.orange.withOpacity(0.5)),
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
               ],
             ),

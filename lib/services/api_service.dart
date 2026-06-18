@@ -359,4 +359,51 @@ class ApiService {
   static Future<void> deleteCustomerNote(int id) async {
     await _post('workerAuth.deleteCustomerNote', {'id': id});
   }
+
+  // ─── Pickup Submission ───────────────────────────────────────────────────────
+
+  /// Submit a pickup record to the survey backend and mark the customer as picked
+  /// in the fieldscheduler backend.
+  static Future<void> submitPickup({
+    required int routeId,
+    required int customerId,
+    required String supervisorId,
+    required String binType,
+    required int binQuantity,
+    required String beforePhotoBase64,
+    required String afterPhotoBase64,
+    String incidentReport = '',
+    String customerName = '',
+    String customerPhone = '',
+    String customerAddress = '',
+    String mafCode = '',
+    String buildingId = '',
+    String unitCode = '',
+  }) async {
+    // 1. Submit to survey backend via fieldscheduler proxy
+    await _post('workerAuth.submitPickup', {
+      'routeId': routeId,
+      'customerId': customerId,
+      'supervisorId': supervisorId,
+      'binType': binType,
+      'binQuantity': binQuantity,
+      'beforePhotoBase64': beforePhotoBase64,
+      'afterPhotoBase64': afterPhotoBase64,
+      'incidentReport': incidentReport,
+      'customerName': customerName,
+      'customerPhone': customerPhone,
+      'customerAddress': customerAddress,
+      'mafCode': mafCode,
+      'buildingId': buildingId,
+      'unitCode': unitCode,
+    });
+  }
+
+  /// Mark a customer as picked (sets pickedAt timestamp) in the fieldscheduler DB
+  static Future<void> markCustomerPicked(int routeId, int customerId) async {
+    await _post('workerAuth.markCustomerPicked', {
+      'routeId': routeId,
+      'customerId': customerId,
+    });
+  }
 }

@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:image_picker/image_picker.dart';
@@ -365,16 +367,23 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen>
                   controller: _tabController,
                   children: [_buildInfoTab(), _buildStatementTab(), _buildInvoicesTab(), _buildPaymentsTab(), _buildComplianceTab(), _buildNotesTab()],
                 ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: ElevatedButton.icon(
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ReportViolationScreen(customerId: widget.customerId, routeId: widget.routeId, customerName: name))),
-            icon: const Icon(Icons.warning_amber_rounded),
-            label: const Text('Report Violation'),
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.dangerColor, minimumSize: const Size(double.infinity, 48)),
-          ),
-        ),
+      bottomNavigationBar: Builder(
+        builder: (context) {
+          final role = context.watch<AuthProvider>().workerRole ?? '';
+          final isSupervisor = role == 'supervisor';
+          if (isSupervisor) return const SizedBox.shrink();
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ReportViolationScreen(customerId: widget.customerId, routeId: widget.routeId, customerName: name))),
+                icon: const Icon(Icons.warning_amber_rounded),
+                label: const Text('Report Violation'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.dangerColor, minimumSize: const Size(double.infinity, 48)),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
