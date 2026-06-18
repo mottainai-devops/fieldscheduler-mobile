@@ -1,78 +1,164 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
-import '../providers/auth_provider.dart';
+import '../services/api_service.dart';
 
-class WorkerSelectScreen extends StatelessWidget {
+class WorkerSelectScreen extends StatefulWidget {
   const WorkerSelectScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final extra = GoRouterState.of(context).extra as Map<String, dynamic>?;
-    final workers = (extra?['workers'] as List<dynamic>?) ?? [];
+  State<WorkerSelectScreen> createState() => _WorkerSelectScreenState();
+}
 
+class _WorkerSelectScreenState extends State<WorkerSelectScreen> {
+  List<dynamic> _workers = [];
+  bool _isLoading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadWorkers();
+  }
+
+  Future<void> _loadWorkers() async {
+    setState(() { _isLoading = true; _error = null; });
+    try {
+      final workers = await ApiService.getAllWorkers();
+      setState(() { _workers = workers; _isLoading = false; });
+    } catch (e) {
+      setState(() {
+        _error = 'Could not load profiles. Check your connection.';
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1565C0),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => context.go('/login'),
-        ),
-        title: const Text('Select Your Profile', style: TextStyle(color: Colors.white)),
-      ),
+      backgroundColor: const Color(0xFF0D1B2A),
       body: SafeArea(
         child: Column(
           children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-              child: Text('Who are you?', style: TextStyle(fontSize: 18, color: Colors.white70)),
+            const SizedBox(height: 40),
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1565C0),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Icon(Icons.location_on, size: 44, color: Colors.white),
             ),
+            const SizedBox(height: 20),
+            const Text(
+              'Field Worker App',
+              style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Select your profile to continue',
+              style: TextStyle(fontSize: 15, color: Colors.white60),
+            ),
+            const SizedBox(height: 32),
             Expanded(
-              child: workers.isEmpty
-                  ? const Center(child: Text('No workers found.', style: TextStyle(color: Colors.white)))
-                  : ListView.builder(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: workers.length,
-                      itemBuilder: (context, index) {
-                        final worker = workers[index] as Map<String, dynamic>;
-                        final name = worker['name'] as String? ?? 'Worker';
-                        final role = worker['role'] as String? ?? 'field_worker';
-                        return Card(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          child: ListTile(
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                            leading: CircleAvatar(
-                              backgroundColor: const Color(0xFF1565C0),
-                              child: Text(name.isNotEmpty ? name[0].toUpperCase() : 'W',
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                            ),
-                            title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                            subtitle: Text(_formatRole(role), style: TextStyle(color: Colors.grey.shade600)),
-                            trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Color(0xFF1565C0)),
-                            onTap: () async {
-                              await context.read<AuthProvider>().selectWorker(worker);
-                              if (context.mounted) context.go('/home');
-                            },
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator(color: Colors.white))
+                  : _error != null
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(_error!,
+                                  style: const TextStyle(color: Colors.white70),
+                                  textAlign: TextAlign.center),
+                              const SizedBox(height: 16),
+                              ElevatedButton(
+                                onPressed: _loadWorkers,
+                                child: const Text('Retry'),
+                              ),
+                            ],
                           ),
-                        );
-                      },
-                    ),
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          itemCount: _workers.length,
+                          itemBuilder: (context, index) {
+                            final worker = _workers[index] as Map<String, dynamic>;
+                            final name = worker['name'] as String? ?? 'Worker';
+                            final phone = worker['phone'] as String? ??
+                                worker['phoneNumber'] as String? ?? '';
+                            final initials = name.trim().isNotEmpty
+                                ? name.trim().split(' ').map((w) => w.isNotEmpty ? w[0] : '').take(2).join().toUpperCase()
+                                : 'W';
+                            final colors = [
+                              const Color(0xFF1565C0),
+                              const Color(0xFF00897B),
+                              const Color(0xFF6A1B9A),
+                              const Color(0xFF2E7D32),
+                              const Color(0xFFAD1457),
+                            ];
+                            final avatarColor = colors[name.codeUnitAt(0) % colors.length];
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1A2A3A),
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 10),
+                                leading: Container(
+                                  width: 48,
+                                  height: 48,
+                                  decoration: BoxDecoration(
+                                    color: avatarColor,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Text(
+                                    initials,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ),
+                                title: Text(
+                                  name,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                subtitle: phone.isNotEmpty
+                                    ? Text(phone,
+                                        style: const TextStyle(
+                                            color: Colors.white54, fontSize: 13))
+                                    : null,
+                                trailing: const Icon(Icons.chevron_right,
+                                    color: Colors.white38),
+                                onTap: () {
+                                  context.go('/pin', extra: {'worker': worker});
+                                },
+                              ),
+                            );
+                          },
+                        ),
+            ),
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                '© 2025 Field Scheduler',
+                style: TextStyle(color: Colors.white30, fontSize: 12),
+              ),
             ),
           ],
         ),
       ),
     );
-  }
-
-  String _formatRole(String role) {
-    switch (role) {
-      case 'field_manager': return 'Field Manager';
-      case 'field_worker': return 'Field Worker';
-      case 'admin': return 'Administrator';
-      default: return role.replaceAll('_', ' ').toUpperCase();
-    }
   }
 }

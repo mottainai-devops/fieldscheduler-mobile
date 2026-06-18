@@ -69,23 +69,23 @@ class FieldWorkerApp extends StatelessWidget {
 
   GoRouter _buildRouter(AuthProvider auth) {
     return GoRouter(
-      initialLocation: '/login',
+      initialLocation: '/select-worker',
       redirect: (context, state) {
         final isLoggedIn = auth.isLoggedIn;
-        final isLoginPage = state.matchedLocation == '/login' ||
-            state.matchedLocation == '/select-worker';
-        if (!isLoggedIn && !isLoginPage) return '/login';
-        if (isLoggedIn && state.matchedLocation == '/login') return '/home';
+        final loc = state.matchedLocation;
+        final isAuthPage = loc == '/select-worker' || loc == '/pin';
+        if (!isLoggedIn && !isAuthPage) return '/select-worker';
+        if (isLoggedIn && isAuthPage) return '/home';
         return null;
       },
       routes: [
         GoRoute(
-          path: '/login',
-          builder: (context, state) => const PinLoginScreen(),
-        ),
-        GoRoute(
           path: '/select-worker',
           builder: (context, state) => const WorkerSelectScreen(),
+        ),
+        GoRoute(
+          path: '/pin',
+          builder: (context, state) => const PinLoginScreen(),
         ),
         GoRoute(
           path: '/home',
