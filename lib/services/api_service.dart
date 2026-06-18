@@ -58,11 +58,16 @@ class ApiService {
   }
 
   static Future<Map<String, dynamic>> loginWithPin(int workerId, String pin) async {
-    final result = await _post('workerAuth.login', {
+    // Uses verifyPin (query) — accepts workerId + pin, returns {success, worker}
+    final result = await _get('workerAuth.verifyPin', {
       'workerId': workerId,
       'pin': pin,
     });
-    return result as Map<String, dynamic>;
+    final data = result as Map<String, dynamic>;
+    if (data['success'] != true) {
+      throw Exception(data['message'] ?? 'Invalid PIN');
+    }
+    return data;
   }
 
   static Future<void> saveSession(String cookie, int workerId, String workerName) async {
