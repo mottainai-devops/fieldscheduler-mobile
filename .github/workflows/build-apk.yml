@@ -40,7 +40,13 @@ jobs:
           channel: 'stable'
           cache: true
 
-      # ── 4. Derive version from tag or manual input ───────────────────────────
+      # ── 4. Write local.properties (required by settings.gradle) ─────────────
+      - name: Write local.properties
+        run: |
+          echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
+          echo "sdk.dir=$ANDROID_HOME" >> android/local.properties
+
+      # ── 5. Derive version from tag or manual input ───────────────────────────
       - name: Derive version info
         id: version
         run: |
