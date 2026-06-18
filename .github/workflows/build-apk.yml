@@ -99,8 +99,9 @@ jobs:
           path: build/app/outputs/flutter-apk/FieldWorker-${{ steps.version.outputs.tag }}.apk
           retention-days: 90
 
-      # ── 11. Create GitHub Release and attach APK ─────────────────────────────
+      # ── 11. Create GitHub Release and attach APK (tag builds only) ─────────────────────
       - name: Create GitHub Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
