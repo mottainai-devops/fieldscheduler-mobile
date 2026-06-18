@@ -7,7 +7,8 @@ import '../services/api_service.dart';
 class ReportViolationScreen extends StatefulWidget {
   final int customerId;
   final int routeId;
-  const ReportViolationScreen({super.key, required this.customerId, required this.routeId});
+  final String? customerName;
+  const ReportViolationScreen({super.key, required this.customerId, required this.routeId, this.customerName});
   @override
   State<ReportViolationScreen> createState() => _ReportViolationScreenState();
 }
@@ -69,7 +70,7 @@ class _ReportViolationScreenState extends State<ReportViolationScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Report Violation')),
+      appBar: AppBar(title: Text(widget.customerName != null ? 'Report Violation — ${widget.customerName}' : 'Report Violation')),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
