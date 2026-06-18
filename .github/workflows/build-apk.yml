@@ -36,17 +36,11 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.6'   # Pin to the version used for v1.10 build
+          flutter-version: '3.19.6'
           channel: 'stable'
           cache: true
 
-      # ── 4. Write local.properties (required by settings.gradle) ─────────────
-      - name: Write local.properties
-        run: |
-          echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
-          echo "sdk.dir=$ANDROID_HOME" >> android/local.properties
-
-      # ── 5. Derive version from tag or manual input ───────────────────────────
+      # ── 4. Derive version from tag or manual input ───────────────────────────
       - name: Derive version info
         id: version
         run: |
@@ -55,9 +49,8 @@ jobs:
             echo "code=${{ github.event.inputs.version_code }}" >> $GITHUB_OUTPUT
             echo "tag=v${{ github.event.inputs.version_name }}" >> $GITHUB_OUTPUT
           else
-            TAG="${GITHUB_REF#refs/tags/}"          # e.g. v1.11
-            NAME="${TAG#v}"                          # e.g. 1.11
-            # Derive version code: major*1000 + minor*10 (e.g. 1.11 → 1110)
+            TAG="${GITHUB_REF#refs/tags/}"
+            NAME="${TAG#v}"
             MAJOR=$(echo "$NAME" | cut -d. -f1)
             MINOR=$(echo "$NAME" | cut -d. -f2)
             PATCH=$(echo "$NAME" | cut -d. -f3)
@@ -68,29 +61,37 @@ jobs:
             echo "tag=${TAG}" >> $GITHUB_OUTPUT
           fi
 
-      # ── 5. Install dependencies ──────────────────────────────────────────────
+      # ── 5. Write local.properties (required by Gradle) ───────────────────────
+      - name: Write local.properties
+        run: |
+          echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
+          echo "sdk.dir=$ANDROID_HOME" >> android/local.properties
+          echo "flutter.versionName=${{ steps.version.outputs.name }}" >> android/local.properties
+          echo "flutter.versionCode=${{ steps.version.outputs.code }}" >> android/local.properties
+
+      # ── 6. Install dependencies ──────────────────────────────────────────────
       - name: Install Flutter dependencies
         run: flutter pub get
 
-      # ── 6. Run tests (non-blocking — warns but does not fail the build) ──────
+      # ── 7. Run tests (non-blocking) ──────────────────────────────────────────
       - name: Run tests
-        run: flutter test --no-pub || echo "⚠️  Tests failed — continuing build"
+        run: flutter test --no-pub || echo "Tests failed — continuing build"
         continue-on-error: true
 
-      # ── 7. Build release APK ─────────────────────────────────────────────────
+      # ── 8. Build release APK ─────────────────────────────────────────────────
       - name: Build release APK
         run: |
           flutter build apk --release \
             --build-name=${{ steps.version.outputs.name }} \
             --build-number=${{ steps.version.outputs.code }}
 
-      # ── 8. Rename APK to versioned filename ──────────────────────────────────
+      # ── 9. Rename APK to versioned filename ──────────────────────────────────
       - name: Rename APK
         run: |
           mv build/app/outputs/flutter-apk/app-release.apk \
              build/app/outputs/flutter-apk/FieldWorker-${{ steps.version.outputs.tag }}.apk
 
-      # ── 9. Upload APK as build artifact ──────────────────────────────────────
+      # ── 10. Upload APK as build artifact ─────────────────────────────────────
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -98,7 +99,7 @@ jobs:
           path: build/app/outputs/flutter-apk/FieldWorker-${{ steps.version.outputs.tag }}.apk
           retention-days: 90
 
-      # ── 10. Create GitHub Release and attach APK ─────────────────────────────
+      # ── 11. Create GitHub Release and attach APK ─────────────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
