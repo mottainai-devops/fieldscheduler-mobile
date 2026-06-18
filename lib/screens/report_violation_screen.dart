@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
-import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 
 class ReportViolationScreen extends StatefulWidget {
@@ -46,14 +44,12 @@ class _ReportViolationScreenState extends State<ReportViolationScreen> {
     }
     setState(() { _isSubmitting = true; });
     try {
-      final auth = context.read<AuthProvider>();
       await ApiService.reportViolation(
         customerId: widget.customerId,
         routeId: widget.routeId,
         violationTypeId: _selectedTypeId!,
         description: _descController.text,
         severity: _severity,
-        workerId: auth.workerId ?? 0,
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -47,3 +47,27 @@ class AppTheme {
     );
   }
 }
+
+/// Helper class for dynamic colour lookups (severity, status)
+class AppColors {
+  static Color severityColor(String severity) {
+    switch (severity.toLowerCase()) {
+      case 'high':   return const Color(0xFFF44336);
+      case 'medium': return const Color(0xFFFF9800);
+      case 'low':    return const Color(0xFF4CAF50);
+      default:       return const Color(0xFF8FA8C0);
+    }
+  }
+
+  static Color statusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'completed':   return const Color(0xFF4CAF50);
+      case 'in_progress': return const Color(0xFFFF9800);
+      case 'pending':     return const Color(0xFF42A5F5);
+      case 'cancelled':   return const Color(0xFFF44336);
+      case 'active':      return const Color(0xFF4CAF50);
+      case 'inactive':    return const Color(0xFF8FA8C0);
+      default:            return const Color(0xFF8FA8C0);
+    }
+  }
+}

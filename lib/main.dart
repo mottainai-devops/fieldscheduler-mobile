@@ -99,14 +99,17 @@ class FieldWorkerApp extends StatelessWidget {
           path: '/routes/:routeId',
           builder: (context, state) {
             final routeId = int.tryParse(state.pathParameters['routeId'] ?? '0') ?? 0;
-            return RouteDetailScreen(routeId: routeId);
+            final routeName = state.uri.queryParameters['name'] ?? 'Route #$routeId';
+            return RouteDetailScreen(routeId: routeId, routeName: routeName);
           },
         ),
         GoRoute(
           path: '/routes/:routeId/optimize',
           builder: (context, state) {
-            final routeId = int.tryParse(state.pathParameters['routeId'] ?? '0') ?? 0;
-            return OptimizedRouteScreen(routeId: routeId);
+            final extra = state.extra as Map<String, dynamic>? ?? {};
+            final route = extra['route'] as Map<String, dynamic>? ?? {'id': state.pathParameters['routeId']};
+            final customers = (extra['customers'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+            return OptimizedRouteScreen(route: route, customers: customers);
           },
         ),
         GoRoute(
