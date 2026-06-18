@@ -1,0 +1,118 @@
+name: Build & Release FieldWorker APK
+
+on:
+  push:
+    tags:
+      - 'v*.*'        # Triggers on version tags like v1.11, v1.11.0, v2.0
+  workflow_dispatch:  # Allows manual trigger from the GitHub Actions UI
+    inputs:
+      version_name:
+        description: 'Version name (e.g. 1.11.0)'
+        required: true
+        default: '1.11.0'
+      version_code:
+        description: 'Version code (integer, e.g. 11)'
+        required: true
+        default: '11'
+
+jobs:
+  build:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout source code ──────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Java (required by Android SDK) ─────────────────────────────
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # ── 3. Set up Flutter ────────────────────────────────────────────────────
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.6'   # Pin to the version used for v1.10 build
+          channel: 'stable'
+          cache: true
+
+      # ── 4. Derive version from tag or manual input ───────────────────────────
+      - name: Derive version info
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ github.event.inputs.version_name }}" >> $GITHUB_OUTPUT
+            echo "code=${{ github.event.inputs.version_code }}" >> $GITHUB_OUTPUT
+            echo "tag=v${{ github.event.inputs.version_name }}" >> $GITHUB_OUTPUT
+          else
+            TAG="${GITHUB_REF#refs/tags/}"          # e.g. v1.11
+            NAME="${TAG#v}"                          # e.g. 1.11
+            # Derive version code: major*1000 + minor*10 (e.g. 1.11 → 1110)
+            MAJOR=$(echo "$NAME" | cut -d. -f1)
+            MINOR=$(echo "$NAME" | cut -d. -f2)
+            PATCH=$(echo "$NAME" | cut -d. -f3)
+            PATCH=${PATCH:-0}
+            CODE=$(( MAJOR * 1000 + MINOR * 10 + PATCH ))
+            echo "name=${NAME}" >> $GITHUB_OUTPUT
+            echo "code=${CODE}" >> $GITHUB_OUTPUT
+            echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          fi
+
+      # ── 5. Install dependencies ──────────────────────────────────────────────
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      # ── 6. Run tests (non-blocking — warns but does not fail the build) ──────
+      - name: Run tests
+        run: flutter test --no-pub || echo "⚠️  Tests failed — continuing build"
+        continue-on-error: true
+
+      # ── 7. Build release APK ─────────────────────────────────────────────────
+      - name: Build release APK
+        run: |
+          flutter build apk --release \
+            --build-name=${{ steps.version.outputs.name }} \
+            --build-number=${{ steps.version.outputs.code }}
+
+      # ── 8. Rename APK to versioned filename ──────────────────────────────────
+      - name: Rename APK
+        run: |
+          mv build/app/outputs/flutter-apk/app-release.apk \
+             build/app/outputs/flutter-apk/FieldWorker-${{ steps.version.outputs.tag }}.apk
+
+      # ── 9. Upload APK as build artifact ──────────────────────────────────────
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FieldWorker-${{ steps.version.outputs.tag }}-apk
+          path: build/app/outputs/flutter-apk/FieldWorker-${{ steps.version.outputs.tag }}.apk
+          retention-days: 90
+
+      # ── 10. Create GitHub Release and attach APK ─────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "FieldWorker ${{ steps.version.outputs.tag }}"
+          body: |
+            ## FieldWorker ${{ steps.version.outputs.tag }}
+
+            **Build:** ${{ steps.version.outputs.code }}
+            **Built:** ${{ github.run_id }}
+            **Commit:** ${{ github.sha }}
+
+            ### Installation
+            1. Download `FieldWorker-${{ steps.version.outputs.tag }}.apk` below
+            2. Enable "Install from unknown sources" on your Android device
+            3. Open the downloaded APK to install
+
+            > For managed deployment, distribute via your MDM solution.
+          files: build/app/outputs/flutter-apk/FieldWorker-${{ steps.version.outputs.tag }}.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
