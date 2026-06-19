@@ -532,15 +532,19 @@ class ApiService {
   // ─── Tranche 3: Request Handoff ─────────────────────────────────────────────
 
   /// Area D: Submit a handoff request for a schedule or instance.
+  /// B3 fix: routeId is passed when scheduleId is null (non-recurring routes) so the
+  /// server can resolve the scheduleId via the routes→routeSchedules join.
   static Future<Map<String, dynamic>> requestHandoff({
     int? scheduleId,
     int? instanceId,
+    int? routeId,
     required int supervisorId,
     required String reason,
   }) async {
     return await _post('calendarOverrides.requestHandoff', {
       if (scheduleId != null) 'scheduleId': scheduleId,
       if (instanceId != null) 'instanceId': instanceId,
+      if (routeId != null) 'routeId': routeId,
       'supervisorId': supervisorId,
       'reason': reason,
     });

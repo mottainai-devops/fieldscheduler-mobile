@@ -9,15 +9,17 @@ import '../utils/theme.dart';
 
 /// Area A (F1–F4): Supervisor "Today" view.
 ///
-/// Shows routes scheduled for today for the logged-in supervisor.
-/// For each route that has a resolved routeInstance, also loads the
-/// effective customer list via getResolvedCustomersForInstance (F3).
+/// Shows routes scheduled for today (or [date] when provided) for the
+/// logged-in supervisor. For each route that has a resolved routeInstance,
+/// also loads the effective customer list via getResolvedCustomersForInstance (F3).
 ///
-/// F4: If a customer's MAF code cannot be matched in LotCache, a soft
-/// amber warning badge is shown on the customer row — the route is NOT
-/// blocked, but the supervisor is alerted that the webhook URL is unknown.
+/// B4 fix: accepts an optional [date] parameter so WeekScheduleScreen can
+/// drill into a specific day without always showing today's data.
 class TodayRoutesScreen extends StatefulWidget {
-  const TodayRoutesScreen({super.key});
+  /// The date to display. Defaults to today when null.
+  final DateTime? date;
+
+  const TodayRoutesScreen({super.key, this.date});
 
   @override
   State<TodayRoutesScreen> createState() => _TodayRoutesScreenState();
@@ -34,9 +36,10 @@ class _TodayRoutesScreenState extends State<TodayRoutesScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
+  /// B4 fix: use widget.date when provided, otherwise fall back to today.
   String get _todayStr {
-    final now = DateTime.now();
-    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final d = widget.date ?? DateTime.now();
+    return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
   }
 
   Future<void> _load() async {
@@ -63,8 +66,9 @@ class _TodayRoutesScreenState extends State<TodayRoutesScreen> {
         to: today,
       );
 
-      final lotCache = context.read<LotCache>();
-      final events = <_TodayEvent>[];
+      // B1 fix: use the global lotCache singleton — LotCache is NOT registered
+      // as a Provider; it is a module-level singleton from lot_cache.dart.
+      final events = <_TodayEvent>();
 
       for (final e in rawEvents) {
         final ev = Map<String, dynamic>.from(e as Map);
@@ -96,6 +100,9 @@ class _TodayRoutesScreenState extends State<TodayRoutesScreen> {
                 customerId: cm['customerId'] is int
                     ? cm['customerId'] as int
                     : int.tryParse(cm['customerId'].toString()) ?? 0,
+                routeId: ev['routeId'] is int
+                    ? ev['routeId'] as int
+                    : int.tryParse(ev['routeId']?.toString() ?? ''),
                 name: (cd['name'] ?? 'Customer').toString(),
                 maf: maf,
                 address: (cd['address'] ?? '').toString(),
@@ -151,7 +158,11 @@ class _TodayRoutesScreenState extends State<TodayRoutesScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Today', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            // B4 fix: show 'Today' only when displaying today's date
+            Text(
+              widget.date == null ? 'Today' : _todayStr,
+              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            ),
             Text(
               _todayStr,
               style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
@@ -261,6 +272,7 @@ class _TodayEvent {
 
 class _CustomerRow {
   final int customerId;
+  final int? routeId;
   final String name;
   final String maf;
   final String address;
@@ -269,6 +281,7 @@ class _CustomerRow {
 
   const _CustomerRow({
     required this.customerId,
+    required this.routeId,
     required this.name,
     required this.maf,
     required this.address,
@@ -441,7 +454,15 @@ class _CustomerTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    // F4 (Cleanup 1): Tap navigates to CustomerDetailScreen
+    return InkWell(
+      onTap: () => Navigator.pushNamed(
+        context,
+        '/customers/${customer.customerId}',
+        arguments: {'routeId': customer.routeId ?? 0},
+      ),
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
       child: Row(
         children: [
@@ -510,6 +531,7 @@ class _CustomerTile extends StatelessWidget {
           ),
         ],
       ),
-    );
+      ),  // closes Padding (child of InkWell)
+    );  // closes InkWell
   }
 }

@@ -193,9 +193,24 @@ class FieldWorkerApp extends StatelessWidget {
           builder: (context, state) => const PendingPickupsScreen(),
         ),
         // Area A (F1-F4): Supervisor Today view
+        // B4 fix: parse optional ?date=YYYY-MM-DD query param from WeekScheduleScreen drill-down
         GoRoute(
           path: '/supervisor-today',
-          builder: (context, state) => const TodayRoutesScreen(),
+          builder: (context, state) {
+            final dateStr = state.uri.queryParameters['date'];
+            DateTime? date;
+            if (dateStr != null && dateStr.isNotEmpty) {
+              final parts = dateStr.split('-');
+              if (parts.length == 3) {
+                date = DateTime(
+                  int.tryParse(parts[0]) ?? DateTime.now().year,
+                  int.tryParse(parts[1]) ?? 1,
+                  int.tryParse(parts[2]) ?? 1,
+                );
+              }
+            }
+            return TodayRoutesScreen(date: date);
+          },
         ),
         // Area B (G1-G3): Supervisor Week view
         GoRoute(

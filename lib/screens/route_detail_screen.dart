@@ -157,8 +157,10 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
 
     setState(() => _isRequestingHandoff = true);
     try {
+      // B3 fix: pass routeId so server can resolve scheduleId for non-recurring routes
       await ApiService.requestHandoff(
         scheduleId: _scheduleId,
+        routeId: widget.routeId,
         supervisorId: supervisorId,
         reason: reason,
       );
@@ -535,8 +537,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
           ),
           // Area D (I1): Request Handoff button — supervisor only, disabled after submit
           Builder(builder: (ctx) {
-            final role = ctx.watch<AuthProvider>().workerRole ?? '';
-            if (role != 'supervisor') return const SizedBox.shrink();
+            // B2 fix: use isSupervisor (covers user/cherry_picker/field_supervisor/supervisor)
+            final isSup = ctx.watch<AuthProvider>().isSupervisor;
+            if (!isSup) return const SizedBox.shrink();
             return IconButton(
               icon: _isRequestingHandoff
                   ? const SizedBox(
@@ -754,8 +757,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
                 // Action buttons
                 Builder(
                   builder: (context) {
-                    final role = context.watch<AuthProvider>().workerRole ?? '';
-                    final isSupervisor = role == 'supervisor';
+                    // B2 fix: use isSupervisor (covers all four Survey App supervisor roles)
+                    final isSupervisor = context.watch<AuthProvider>().isSupervisor;
                     final isPicked = _pickedCustomerIds.contains(id);
                     final isAlreadySkipped = _skippedCustomerIds.contains(id);
                     return Padding(
