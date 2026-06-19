@@ -1,4 +1,7 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -7,35 +10,39 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../providers/auth_provider.dart';
+import '../services/database.dart';
 import '../services/lot_cache.dart';
+import '../services/photo_store.dart';
+import '../services/pickup_queue.dart';
 import '../utils/theme.dart';
 
 /// Pickup submission screen for supervisors.
 ///
-/// Area D (§4): Submits the full Survey App schema directly to the resolved
-/// webhook URL via http.MultipartRequest — NOT via the workerAuth.submitPickup
-/// tRPC proxy.
+/// Tranche 1 (Area D) + Tranche 2 (Sub-areas 6, E7):
 ///
-/// Key changes from the previous version:
-///   D1  — Authorization: Bearer header is attached to the MultipartRequest
-///          via _attachAuth() which reads the token live from secure storage.
-///   D3  — Full provenance payload per §4.1 (userId, companyId, companyName,
-///          lotCode, lotName, socioClass, submittedFrom, supervisorId, etc.)
-///   D4  — Null omission helper skips null / empty / "null" / "undefined" values.
-///   D5  — Webhook URL resolved from cached lot by customerType (billing type):
-///          monthlyBilling → monthlyWebhook, otherwise → paytWebhook.
-///   BIN — Seven Survey App bin types; wheelieBinType sub-dropdown shown when
-///          the selected bin type is a wheelie variant.
+///   D1  — Authorization: Bearer header read live from secure storage.
+///   D3  — Full provenance payload per §4.1.
+///   D4  — Null omission helper.
+///   D5  — Webhook URL resolved from LotCache by customerType.
+///   E6  — Draft auto-save (debounced 500ms) keyed on routeCustomerId.
+///          Rehydrates form on reopen. Draft deleted on successful enqueue.
+///   E7  — Submission refactored to use PickupQueue.enqueue() — synchronous
+///          submit path is gone. Pickup feels instant regardless of connectivity.
 class PickupSubmissionScreen extends StatefulWidget {
   final int routeId;
   final int customerId;
   final Map<String, dynamic> customer;
+
+  /// Optional: the route_customer_id used as the draft key.
+  /// If not provided, falls back to customerId.
+  final int? routeCustomerId;
 
   const PickupSubmissionScreen({
     super.key,
     required this.routeId,
     required this.customerId,
     required this.customer,
+    this.routeCustomerId,
   });
 
   @override
@@ -58,7 +65,6 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
     'Other',
   ];
 
-  // Wheelie sub-types shown only when a wheelie variant is selected
   static const List<String> _wheelieBinSubTypes = [
     'Residential',
     'Commercial',
@@ -72,6 +78,31 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
   File? _afterPhoto;
   bool _isSubmitting = false;
   String? _error;
+
+  // E6: draft key
+  int get _draftKey => widget.routeCustomerId ?? widget.customerId;
+
+  // E6: debounce timer for auto-save
+  Timer? _draftSaveTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _rehydrateDraft();
+    // Listen to form field changes for auto-save
+    _incidentController.addListener(_scheduleDraftSave);
+    _binQtyController.addListener(_scheduleDraftSave);
+  }
+
+  @override
+  void dispose() {
+    _draftSaveTimer?.cancel();
+    _incidentController.removeListener(_scheduleDraftSave);
+    _binQtyController.removeListener(_scheduleDraftSave);
+    _incidentController.dispose();
+    _binQtyController.dispose();
+    super.dispose();
+  }
 
   // ─── Customer field accessors ────────────────────────────────────────────────
 
@@ -88,13 +119,9 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
   String get _unitCode => (_cd['unitCode'] ?? '').toString();
   String get _socioClass => (_cd['socioClass'] ?? '').toString();
 
-  /// D3: customerType sourced from the customer record's billing type,
-  /// not the supervisor's global preference.
   String get _customerType =>
       (_cd['customerType'] ?? _cd['billingType'] ?? _cd['type'] ?? '').toString();
 
-  /// D3: composite customerId = "${arcgisBuildingId}-${unitCode}" with HYPHEN.
-  /// Falls back to String(customer.id) only if either component is null/empty.
   String get _compositeCustomerId {
     final bId = _buildingId;
     final uCode = _unitCode;
@@ -102,11 +129,58 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
     return widget.customerId.toString();
   }
 
-  @override
-  void dispose() {
-    _incidentController.dispose();
-    _binQtyController.dispose();
-    super.dispose();
+  // ─── E6: Draft persistence ───────────────────────────────────────────────────
+
+  /// Rehydrate form state from the saved draft (if any).
+  Future<void> _rehydrateDraft() async {
+    final draft = await AppDatabase.instance.getDraft(_draftKey);
+    if (draft == null) return;
+    try {
+      final state = jsonDecode(draft['form_state_json'] as String)
+          as Map<String, dynamic>;
+      setState(() {
+        _binType = (state['binType'] as String?) ?? _binType;
+        _wheelieBinType = (state['wheelieBinType'] as String?) ?? _wheelieBinType;
+        _incidentController.text = (state['incidentReport'] as String?) ?? '';
+        _binQtyController.text = (state['binQuantity'] as String?) ?? '1';
+      });
+      // Rehydrate photo paths
+      final beforePath = draft['before_photo_path'] as String?;
+      final afterPath = draft['after_photo_path'] as String?;
+      if (beforePath != null && beforePath.isNotEmpty) {
+        final f = File(beforePath);
+        if (await f.exists()) setState(() => _beforePhoto = f);
+      }
+      if (afterPath != null && afterPath.isNotEmpty) {
+        final f = File(afterPath);
+        if (await f.exists()) setState(() => _afterPhoto = f);
+      }
+    } catch (_) {}
+  }
+
+  /// Schedule a debounced draft save (500ms after last change).
+  void _scheduleDraftSave() {
+    _draftSaveTimer?.cancel();
+    _draftSaveTimer = Timer(const Duration(milliseconds: 500), _saveDraft);
+  }
+
+  /// Persist current form state to pickup_drafts.
+  Future<void> _saveDraft() async {
+    final state = {
+      'binType': _binType,
+      'wheelieBinType': _wheelieBinType,
+      'incidentReport': _incidentController.text.trim(),
+      'binQuantity': _binQtyController.text.trim(),
+    };
+    await AppDatabase.instance.upsertDraft({
+      'route_customer_id': _draftKey,
+      'route_id': widget.routeId,
+      'customer_id': widget.customerId,
+      'form_state_json': jsonEncode(state),
+      'before_photo_path': _beforePhoto?.path ?? '',
+      'after_photo_path': _afterPhoto?.path ?? '',
+      'saved_at': DateTime.now().millisecondsSinceEpoch,
+    });
   }
 
   // ─── Photo picker ────────────────────────────────────────────────────────────
@@ -126,13 +200,11 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
         _afterPhoto = File(picked.path);
       }
     });
+    _scheduleDraftSave();
   }
 
   // ─── D1: Auth helper ──────────────────────────────────────────────────────────
 
-  /// D1: Attach Authorization: Bearer header to a MultipartRequest by reading
-  /// the supervisor token live from flutter_secure_storage at submit time.
-  /// No-op if no token is present (field-manager path).
   static Future<void> _attachAuth(http.MultipartRequest req) async {
     const storage = FlutterSecureStorage();
     final token = await storage.read(key: 'workerSurveyToken');
@@ -143,14 +215,12 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
 
   // ─── D4: Null omission helper ────────────────────────────────────────────────
 
-  /// Returns true if the value should be omitted from the multipart payload.
   static bool _isBlank(dynamic v) {
     if (v == null) return true;
     final s = v.toString().trim();
     return s.isEmpty || s == 'null' || s == 'undefined';
   }
 
-  /// Add a field to the multipart request only if it is non-blank.
   static void _addField(
       http.MultipartRequest req, String key, dynamic value) {
     if (!_isBlank(value)) {
@@ -158,7 +228,7 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
     }
   }
 
-  // ─── Submit ──────────────────────────────────────────────────────────────────
+  // ─── E7: Enqueue (replaces synchronous _submit) ──────────────────────────────
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
@@ -180,10 +250,8 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
       final auth = context.read<AuthProvider>();
 
       // ── D5: Resolve webhook URL from cached lot by customerType ──────────────
-      // C3: On cache miss, NoAccessibleLotException is thrown — no fallback.
       final lot = lotCache.resolveByMafCode(_mafCode);
 
-      // D5: Route by billing type — monthlyBilling customers → monthlyWebhook
       final isMonthly = _customerType.toLowerCase().contains('monthly') ||
           (_cd['monthlyBilling'] == true);
       final webhookUrl = isMonthly
@@ -196,10 +264,8 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
             'Contact your administrator.');
       }
 
-      // ── D3: Build the full multipart request ─────────────────────────────────
+      // ── D3: Build payload field bag ──────────────────────────────────────────
       final prefs = await SharedPreferences.getInstance();
-      // D3/Fix2: userId must be the Survey App userId (persisted on login),
-      // NOT the worker email. Falls back to email only if not yet persisted.
       final userId = prefs.getString('surveyAppUserId') ??
           prefs.getString('worker_email') ??
           auth.workerEmail ??
@@ -209,74 +275,87 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
       final companyName = prefs.getString('companyName') ?? auth.companyName ?? '';
       final supervisorFullName = auth.workerName ?? 'Supervisor';
       final qty = int.tryParse(_binQtyController.text.trim()) ?? 1;
-      // D3/Fix2: Four missing provenance fields
-      final customerEmail = (_cd['email'] ?? _cd['customerEmail'] ?? '').toString();
+      final customerEmail =
+          (_cd['email'] ?? _cd['customerEmail'] ?? '').toString();
       final latitude = (_cd['latitude'] ?? _cd['lat'] ?? '').toString();
-      final longitude = (_cd['longitude'] ?? _cd['lng'] ?? _cd['lon'] ?? '').toString();
-      // pickUpDate defaults to today in ISO-8601 format
-      final pickUpDate = DateTime.now().toIso8601String().substring(0, 10);
+      final longitude =
+          (_cd['longitude'] ?? _cd['lng'] ?? _cd['lon'] ?? '').toString();
+      final pickUpDate =
+          DateTime.now().toIso8601String().substring(0, 10);
 
-      final uri = Uri.parse(webhookUrl);
-      final req = http.MultipartRequest('POST', uri);
+      final payload = <String, dynamic>{};
 
-      // D1/Fix1: Attach Authorization: Bearer header from live secure-storage read
-      await _attachAuth(req);
+      void addToPayload(String key, dynamic value) {
+        if (!_isBlank(value)) payload[key] = value.toString().trim();
+      }
 
-      // Core identity fields
-      _addField(req, 'userId', userId);
-      _addField(req, 'companyId', companyId);
-      _addField(req, 'companyName', companyName);
-      _addField(req, 'supervisorId', supervisorFullName);
-      _addField(req, 'submittedFrom', 'FieldWorker');
-
-      // Lot fields
-      _addField(req, 'lotCode', lot['lotCode']);
-      _addField(req, 'lotName', lot['lotName']);
-
-      // Customer fields
-      _addField(req, 'customerId', _compositeCustomerId);
-      _addField(req, 'customerName', _customerName);
-      _addField(req, 'customerPhone', _customerPhone);
-      _addField(req, 'customerAddress', _customerAddress);
-      _addField(req, 'mafCode', _mafCode);
-      _addField(req, 'buildingId', _buildingId);
-      _addField(req, 'unitCode', _unitCode);
-      _addField(req, 'customerType', _customerType);
-      _addField(req, 'socioClass', _socioClass);
-
-      // Bin fields
-      _addField(req, 'binType', _binType);
+      addToPayload('userId', userId);
+      addToPayload('companyId', companyId);
+      addToPayload('companyName', companyName);
+      addToPayload('supervisorId', supervisorFullName);
+      addToPayload('submittedFrom', 'FieldWorker');
+      addToPayload('lotCode', lot['lotCode']);
+      addToPayload('lotName', lot['lotName']);
+      addToPayload('customerId', _compositeCustomerId);
+      addToPayload('customerName', _customerName);
+      addToPayload('customerPhone', _customerPhone);
+      addToPayload('customerAddress', _customerAddress);
+      addToPayload('mafCode', _mafCode);
+      addToPayload('buildingId', _buildingId);
+      addToPayload('unitCode', _unitCode);
+      addToPayload('customerType', _customerType);
+      addToPayload('socioClass', _socioClass);
+      addToPayload('binType', _binType);
       if (_isWheelieType(_binType)) {
-        _addField(req, 'wheelieBinType', _wheelieBinType);
+        addToPayload('wheelieBinType', _wheelieBinType);
       }
-      _addField(req, 'binQuantity', qty);
+      addToPayload('binQuantity', qty);
+      addToPayload('customerEmail', customerEmail);
+      addToPayload('latitude', latitude);
+      addToPayload('longitude', longitude);
+      addToPayload('pickUpDate', pickUpDate);
+      addToPayload('incidentReport', _incidentController.text.trim());
 
-      // D3/Fix2: Four missing provenance fields
-      _addField(req, 'customerEmail', customerEmail);
-      _addField(req, 'latitude', latitude);
-      _addField(req, 'longitude', longitude);
-      _addField(req, 'pickUpDate', pickUpDate);
+      // ── E2: Resize-and-store photos ──────────────────────────────────────────
+      final beforePath =
+          await PhotoStore.storePhoto(_beforePhoto!, prefix: 'before');
+      final afterPath =
+          await PhotoStore.storePhoto(_afterPhoto!, prefix: 'after');
 
-      // Incident report (optional)
-      _addField(req, 'incidentReport', _incidentController.text.trim());
+      // ── E7: Enqueue — no direct network call here ────────────────────────────
+      await pickupQueue.enqueue(
+        routeId: widget.routeId,
+        customerId: widget.customerId,
+        customerName: _customerName,
+        lotCode: (lot['lotCode'] ?? '').toString(),
+        payload: payload,
+        beforePath: beforePath,
+        afterPath: afterPath,
+        webhookUrl: webhookUrl,
+      );
 
-      // Photos as multipart files
-      req.files.add(await http.MultipartFile.fromPath(
-          'beforePhoto', _beforePhoto!.path));
-      req.files.add(await http.MultipartFile.fromPath(
-          'afterPhoto', _afterPhoto!.path));
+      // E6: Delete draft on successful enqueue
+      await AppDatabase.instance.deleteDraft(_draftKey);
 
-      final streamed = await req.send();
-      final response = await http.Response.fromStream(streamed);
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw Exception(
-            'Survey App returned ${response.statusCode}: ${response.body}');
-      }
+      // E7: Trigger flush in background (fire and forget)
+      pickupQueue.flush();
 
       if (mounted) {
-        Navigator.pop(context, true); // true = success, caller marks as Picked
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Pickup queued — will submit when online'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        // Return true so route_detail_screen marks customer as picked optimistically
+        Navigator.pop(context, true);
       }
+    } on QueueFullException catch (e) {
+      setState(() {
+        _error = e.message;
+        _isSubmitting = false;
+      });
     } on NoAccessibleLotException catch (e) {
       setState(() {
         _error = e.message;
@@ -341,9 +420,11 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
                               style: const TextStyle(color: Colors.white)),
                         ))
                     .toList(),
-                onChanged: (v) => setState(() => _binType = v ?? _binType),
+                onChanged: (v) {
+                  setState(() => _binType = v ?? _binType);
+                  _scheduleDraftSave();
+                },
               ),
-              // Wheelie sub-type — shown only for wheelie variants
               if (_isWheelieType(_binType)) ...[
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
@@ -358,8 +439,10 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
                                 style: const TextStyle(color: Colors.white)),
                           ))
                       .toList(),
-                  onChanged: (v) =>
-                      setState(() => _wheelieBinType = v ?? _wheelieBinType),
+                  onChanged: (v) {
+                    setState(() => _wheelieBinType = v ?? _wheelieBinType);
+                    _scheduleDraftSave();
+                  },
                 ),
               ],
               const SizedBox(height: 12),
@@ -449,10 +532,19 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
                               color: Colors.white, strokeWidth: 2),
                         )
                       : const Text(
-                          'Submit Pickup',
+                          'Queue Pickup',
                           style: TextStyle(
                               fontSize: 16, fontWeight: FontWeight.bold),
                         ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              // E7: Offline-first hint
+              const Center(
+                child: Text(
+                  'Pickup will be submitted when online',
+                  style: TextStyle(
+                      color: AppTheme.textSecondary, fontSize: 12),
                 ),
               ),
               const SizedBox(height: 32),
@@ -502,63 +594,52 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
     required File? file,
     required VoidCallback onTap,
     bool required = false,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 130,
-        decoration: BoxDecoration(
-          color: AppTheme.bgCard,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: file != null
-                ? Colors.green.withOpacity(0.5)
-                : Colors.white.withOpacity(0.2),
+  }) =>
+      GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 120,
+          decoration: BoxDecoration(
+            color: AppTheme.bgCard,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppTheme.borderColor),
           ),
-        ),
-        child: file != null
-            ? ClipRRect(
-                borderRadius: BorderRadius.circular(9),
-                child: Image.file(file, fit: BoxFit.cover,
-                    width: double.infinity),
-              )
-            : Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.camera_alt,
-                      color: required ? Colors.orange : Colors.white38,
-                      size: 32),
-                  const SizedBox(height: 6),
-                  Text(
-                    '$label Photo${required ? ' *' : ''}',
-                    style: TextStyle(
-                      color: required ? Colors.orange : Colors.white38,
-                      fontSize: 12,
+          child: file != null
+              ? ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.file(file, fit: BoxFit.cover),
+                )
+              : Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.camera_alt_outlined,
+                        color: required ? Colors.orange : AppTheme.textSecondary,
+                        size: 28),
+                    const SizedBox(height: 6),
+                    Text(
+                      label + (required ? ' *' : ''),
+                      style: TextStyle(
+                        color: required
+                            ? Colors.orange
+                            : AppTheme.textSecondary,
+                        fontSize: 12,
+                      ),
                     ),
-                  ),
-                ],
-              ),
-      ),
-    );
-  }
+                  ],
+                ),
+        ),
+      );
 
   InputDecoration _inputDecoration(String hint) => InputDecoration(
         hintText: hint,
-        hintStyle: const TextStyle(color: Colors.white38),
+        hintStyle: const TextStyle(color: AppTheme.textSecondary),
         filled: true,
         fillColor: AppTheme.bgCard,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+          borderSide: BorderSide.none,
         ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide:
-              const BorderSide(color: AppTheme.primaryColor),
-        ),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       );
 }

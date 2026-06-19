@@ -5,8 +5,12 @@ import 'package:go_router/go_router.dart';
 import 'providers/auth_provider.dart';
 import 'providers/route_provider.dart';
 import 'providers/notification_provider.dart';
+import 'services/database.dart';
 import 'services/lot_cache.dart';
+import 'services/pickup_queue.dart';
+import 'services/sync_coordinator.dart';
 
+import 'screens/pending_pickups_screen.dart';
 import 'screens/pin_login_screen.dart';
 import 'screens/worker_select_screen.dart';
 import 'screens/home_screen.dart';
@@ -25,6 +29,9 @@ import 'services/api_service.dart';
 /// 401 interceptor can navigate without a BuildContext.
 final _appNavigatorKey = GlobalKey<NavigatorState>();
 
+// E3/E4: Global SyncCoordinator — owns connectivity + lifecycle + periodic triggers.
+late final SyncCoordinator _syncCoordinator;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // B6: Wire the shared navigator key into ApiService before any request is made.
@@ -33,6 +40,13 @@ void main() async {
   // triggers a conditional refresh (30-min gate).
   lotCache.register();
   await lotCache.loadFromPrefs();
+  // E1: Initialise the SQLite database (creates tables on first run).
+  await AppDatabase.instance.database;
+  // E3/E4: Initialise the PickupQueue singleton and wire the SyncCoordinator.
+  await pickupQueue.init();
+  _syncCoordinator = SyncCoordinator(queue: pickupQueue, lotCache: lotCache);
+  _syncCoordinator.init();
+  WidgetsBinding.instance.addObserver(_syncCoordinator);
   runApp(const FieldWorkerApp());
 }
 
@@ -46,6 +60,8 @@ class FieldWorkerApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => RouteProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
+        // E5: PickupQueue as ChangeNotifier so HomeScreen badge rebuilds reactively.
+        ChangeNotifierProvider<PickupQueue>.value(value: pickupQueue),
       ],
       child: Consumer<AuthProvider>(
         builder: (context, auth, _) {
@@ -168,6 +184,11 @@ class FieldWorkerApp extends StatelessWidget {
         GoRoute(
           path: '/profile',
           builder: (context, state) => const ProfileScreen(),
+        ),
+        // E5: Pending & Failed queue screen
+        GoRoute(
+          path: '/pending-pickups',
+          builder: (context, state) => const PendingPickupsScreen(),
         ),
       ],
     );

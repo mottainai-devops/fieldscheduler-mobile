@@ -450,6 +450,19 @@ class ApiService {
 
   // ─── Pickup Submission ───────────────────────────────────────────────────────
 
+  /// Called by PickupQueue.flush() on 401 — same logic as _handle401() but
+  /// does NOT throw (the queue loop handles the break itself).
+  static Future<void> handle401FromQueue() async {
+    await _secureStorage.delete(key: 'workerSurveyToken');
+    final ctx = navigatorKey?.currentContext;
+    if (ctx != null) {
+      try {
+        ctx.read<AuthProvider>().clearIdentityOnly();
+      } catch (_) {}
+      ctx.go('/supervisor-login');
+    }
+  }
+
   /// Mark a customer as picked (sets pickedAt timestamp) in the fieldscheduler DB
   static Future<void> markCustomerPicked(int routeId, int customerId) async {
     await _post('workerAuth.markCustomerPicked', {

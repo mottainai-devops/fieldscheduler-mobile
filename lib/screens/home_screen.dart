@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
+import '../services/pickup_queue.dart';
 import '../utils/theme.dart';
 import 'routes_screen.dart';
 import 'notifications_screen.dart';
@@ -23,6 +26,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // E5: Reactive queue badge — rebuilds when PickupQueue notifies
+    final queue = context.watch<PickupQueue>();
+    final pendingCount = queue.pendingCount;
+    final failedCount = queue.failedCount;
+    final totalQueued = pendingCount + failedCount;
+
     return PopScope(
       canPop: false,
       onPopInvoked: (didPop) async {
@@ -56,6 +65,50 @@ class _HomeScreenState extends State<HomeScreen> {
           index: _currentIndex,
           children: _screens,
         ),
+        // E5: Pending queue badge in app bar
+        appBar: totalQueued > 0
+            ? AppBar(
+                backgroundColor: AppTheme.bgCard,
+                automaticallyImplyLeading: false,
+                title: const SizedBox.shrink(),
+                actions: [
+                  InkWell(
+                    onTap: () => context.push('/pending-pickups'),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      child: Row(children: [
+                        if (failedCount > 0) ...
+                          [
+                            const Icon(Icons.error_outline,
+                                color: Colors.red, size: 18),
+                            const SizedBox(width: 4),
+                            Text('$failedCount failed',
+                                style: const TextStyle(
+                                    color: Colors.red,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600)),
+                            const SizedBox(width: 10),
+                          ],
+                        if (pendingCount > 0) ...
+                          [
+                            const Icon(Icons.schedule,
+                                color: Colors.orange, size: 18),
+                            const SizedBox(width: 4),
+                            Text('$pendingCount pending',
+                                style: const TextStyle(
+                                    color: Colors.orange,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600)),
+                          ],
+                      ]),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+              )
+            : null,
         bottomNavigationBar: Container(
           decoration: const BoxDecoration(
             border: Border(top: BorderSide(color: AppTheme.borderColor, width: 1)),
