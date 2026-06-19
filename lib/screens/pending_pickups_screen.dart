@@ -145,64 +145,10 @@ class _PendingPickupsScreenState extends State<PendingPickupsScreen> {
     }
   }
 
-  Future<void> _edit(Map<String, dynamic> row) async {
-    // Decode payload to reconstruct the customer map
-    Map<String, dynamic> payload = {};
-    try {
-      payload = jsonDecode(row['payload_json'] as String) as Map<String, dynamic>;
-    } catch (_) {}
-
-    // Reconstruct a minimal customer map from payload fields
-    final customer = <String, dynamic>{
-      'customerName': payload['customerName'] ?? row['customer_name'],
-      'customer': {
-        'name': payload['customerName'] ?? row['customer_name'],
-        'phone': payload['customerPhone'],
-        'address': payload['customerAddress'],
-        'customermaf': payload['mafCode'],
-        'arcgisBuildingId': payload['buildingId'],
-        'unitCode': payload['unitCode'],
-        'customerType': payload['customerType'],
-        'billingType': payload['customerType'],
-        'socioClass': payload['socioClass'],
-        'email': payload['customerEmail'],
-        'latitude': payload['latitude'],
-        'longitude': payload['longitude'],
-      },
-    };
-
-    final routeId = row['route_id'] as int;
-    final customerId = row['customer_id'] as int;
-
-    // Navigate to pickup form with pre-filled data
-    // The form will create a new queue entry on submit; the original row is
-    // deleted after successful enqueue.
-    final originalRowId = row['id'] as int;
-    final beforePath = row['before_photo'] as String? ?? '';
-    final afterPath = row['after_photo'] as String? ?? '';
-
-    if (!mounted) return;
-    final result = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => _EditPickupWrapper(
-          routeId: routeId,
-          customerId: customerId,
-          customer: customer,
-          originalRowId: originalRowId,
-          existingBeforePath: beforePath,
-          existingAfterPath: afterPath,
-          existingPayload: payload,
-        ),
-      ),
-    );
-
-    if (result == true) {
-      // Delete the original queued row (new row created by form)
-      await AppDatabase.instance.deletePickup(originalRowId);
-      await pickupQueue.refreshCounts();
-    }
-  }
+  // Edit is intentionally not implemented.
+  // To edit a queued pickup: discard it here, then re-submit from the route
+  // detail screen. This avoids duplicate queue entries and keeps the form
+  // logic in a single place.
 
   // ── Build ────────────────────────────────────────────────────────────────────
 
@@ -247,24 +193,22 @@ class _PendingPickupsScreenState extends State<PendingPickupsScreen> {
                   children: [
                     if (_pending.isNotEmpty) ...[
                       _sectionHeader('Pending (${_pending.length})'),
-                      ..._pending.map((r) => _QueueRow(
-                            row: r,
-                            isFailed: false,
-                            onRetry: null,
-                            onEdit: () => _edit(r),
-                            onDiscard: () => _discard(r),
-                          )),
+                    ..._pending.map((r) => _QueueRow(
+                          row: r,
+                          isFailed: false,
+                          onRetry: null,
+                          onDiscard: () => _discard(r),
+                        )),
                       const SizedBox(height: 16),
                     ],
                     if (_failed.isNotEmpty) ...[
                       _sectionHeader('Failed (${_failed.length})'),
-                      ..._failed.map((r) => _QueueRow(
-                            row: r,
-                            isFailed: true,
-                            onRetry: () => _retry(r),
-                            onEdit: () => _edit(r),
-                            onDiscard: () => _discard(r),
-                          )),
+                    ..._failed.map((r) => _QueueRow(
+                          row: r,
+                          isFailed: true,
+                          onRetry: () => _retry(r),
+                          onDiscard: () => _discard(r),
+                        )),
                     ],
                   ],
                 ),
@@ -291,14 +235,12 @@ class _QueueRow extends StatefulWidget {
   final Map<String, dynamic> row;
   final bool isFailed;
   final VoidCallback? onRetry;
-  final VoidCallback? onEdit;
   final VoidCallback? onDiscard;
 
   const _QueueRow({
     required this.row,
     required this.isFailed,
     this.onRetry,
-    this.onEdit,
     this.onDiscard,
   });
 
@@ -356,13 +298,14 @@ class _QueueRowState extends State<_QueueRow> {
                   ),
                 ),
               ),
-              // Action menu
+                // Action menu — Retry (failed only) + Discard.
+              // Edit is intentionally absent: discard and re-submit from the
+              // route detail screen to avoid duplicate queue entries.
               PopupMenuButton<String>(
                 color: AppTheme.bgCard,
                 icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
                 onSelected: (v) {
                   if (v == 'retry') widget.onRetry?.call();
-                  if (v == 'edit') widget.onEdit?.call();
                   if (v == 'discard') widget.onDiscard?.call();
                 },
                 itemBuilder: (_) => [
@@ -375,14 +318,6 @@ class _QueueRowState extends State<_QueueRow> {
                         Text('Retry', style: TextStyle(color: Colors.white)),
                       ]),
                     ),
-                  const PopupMenuItem(
-                    value: 'edit',
-                    child: Row(children: [
-                      Icon(Icons.edit_outlined, size: 16, color: Colors.white),
-                      SizedBox(width: 8),
-                      Text('Edit', style: TextStyle(color: Colors.white)),
-                    ]),
-                  ),
                   const PopupMenuItem(
                     value: 'discard',
                     child: Row(children: [
@@ -420,6 +355,18 @@ class _QueueRowState extends State<_QueueRow> {
             beforePath: row['before_photo'] as String? ?? '',
             afterPath: row['after_photo'] as String? ?? '',
           ),
+          // Inline guidance note for failed items
+          if (widget.isFailed) ...[  
+            const SizedBox(height: 8),
+            const Text(
+              'To edit: Discard this entry, then re-submit from the route detail screen.',
+              style: TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 11,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -475,102 +422,7 @@ class _PhotoRow extends StatelessWidget {
       );
 }
 
-// ── Edit wrapper — reopens pickup form pre-filled ─────────────────────────────
-
-/// Thin wrapper that imports PickupSubmissionScreen and passes pre-filled data.
-/// On successful enqueue the original row is deleted by the caller.
-class _EditPickupWrapper extends StatelessWidget {
-  final int routeId;
-  final int customerId;
-  final Map<String, dynamic> customer;
-  final int originalRowId;
-  final String existingBeforePath;
-  final String existingAfterPath;
-  final Map<String, dynamic> existingPayload;
-
-  const _EditPickupWrapper({
-    required this.routeId,
-    required this.customerId,
-    required this.customer,
-    required this.originalRowId,
-    required this.existingBeforePath,
-    required this.existingAfterPath,
-    required this.existingPayload,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Import here to avoid circular dependency at top-level
-    return _PickupEditProxy(
-      routeId: routeId,
-      customerId: customerId,
-      customer: customer,
-      existingBeforePath: existingBeforePath,
-      existingAfterPath: existingAfterPath,
-      existingPayload: existingPayload,
-    );
-  }
-}
-
-/// Proxy that dynamically imports PickupSubmissionScreen to avoid circular
-/// import at the top of this file.
-class _PickupEditProxy extends StatelessWidget {
-  final int routeId;
-  final int customerId;
-  final Map<String, dynamic> customer;
-  final String existingBeforePath;
-  final String existingAfterPath;
-  final Map<String, dynamic> existingPayload;
-
-  const _PickupEditProxy({
-    required this.routeId,
-    required this.customerId,
-    required this.customer,
-    required this.existingBeforePath,
-    required this.existingAfterPath,
-    required this.existingPayload,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // We use a Builder to defer the import — the actual screen is in
-    // pickup_submission_screen.dart which imports this file's queue.
-    // To avoid a circular import, we navigate via a named route instead.
-    // The route '/pickup-edit' is registered in main.dart with extra params.
-    //
-    // For now, show a placeholder that navigates to the standard pickup form.
-    // The form will create a new queue entry; the caller handles row deletion.
-    return Scaffold(
-      backgroundColor: AppTheme.bgDark,
-      appBar: AppBar(
-        backgroundColor: AppTheme.bgCard,
-        title: const Text('Edit Pickup',
-            style: TextStyle(color: Colors.white)),
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.edit_note, color: Colors.orange, size: 48),
-              const SizedBox(height: 16),
-              const Text(
-                'Re-open the pickup form from the route detail screen to edit this submission.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppTheme.textSecondary),
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Back'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+// Edit is not implemented in this screen.
+// To modify a queued pickup: Discard it from this screen, then re-submit
+// from the route detail screen. This keeps the form logic in one place
+// and avoids duplicate queue entries.

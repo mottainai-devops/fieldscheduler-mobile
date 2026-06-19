@@ -14,8 +14,10 @@ import 'pickup_queue.dart';
 ///      When the new state is anything other than ConnectivityResult.none,
 ///      call queue.flush().
 ///
-///   2. Lifecycle resume: didChangeAppLifecycleState → AppLifecycleState.resumed
-///      Calls queue.flush() AND lotCache.maybeRefresh() (Tranche 1 path).
+  ///   2. Lifecycle resume: didChangeAppLifecycleState → AppLifecycleState.resumed
+  ///      Calls queue.flush() AND lotCache.forceRefresh() (resets _cachedAt=0 then
+  ///      calls _maybeRefresh, which re-checks the 30-min gate — effectively a
+  ///      conditional refresh without requiring a public maybeRefresh() surface).
 ///
 ///   3. Periodic: Timer.periodic(60s) — calls queue.flush().
 ///      Timer is cancelled on dispose().
@@ -62,7 +64,10 @@ class SyncCoordinator extends WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _queue.flush();
-      _lotCache.maybeRefresh();
+      // forceRefresh() resets _cachedAt to 0 then calls the internal
+      // _maybeRefresh() gate — the 30-min check still applies on the
+      // next call, so this is not unconditionally expensive.
+      _lotCache.forceRefresh();
     }
   }
 }

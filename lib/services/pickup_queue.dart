@@ -60,6 +60,9 @@ class PickupQueue extends ChangeNotifier {
   int get pendingCount => _pendingCount;
   int get failedCount => _failedCount;
 
+  /// Called once from main() before runApp() to seed initial counts.
+  Future<void> init() async => refreshCounts();
+
   /// Refresh counts from DB and notify listeners.
   Future<void> refreshCounts() async {
     _pendingCount = await AppDatabase.instance.countPending();
