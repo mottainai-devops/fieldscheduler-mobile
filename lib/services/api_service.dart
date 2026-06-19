@@ -470,4 +470,79 @@ class ApiService {
       'customerId': customerId,
     });
   }
+
+  // ─── Tranche 3: Schedule-aware skip ─────────────────────────────────────────
+
+  /// Area C: Resolve the active scheduleId for a given route.
+  /// Returns null when the route is not on a recurring schedule.
+  static Future<int?> getScheduleIdForRoute(int routeId) async {
+    final data = await _get('workerAuth.getScheduleIdForRoute', {'routeId': routeId});
+    final raw = data['scheduleId'];
+    if (raw == null) return null;
+    return raw is int ? raw : int.tryParse(raw.toString());
+  }
+
+  /// Area C: Skip a customer on a route occurrence.
+  static Future<Map<String, dynamic>> skipCustomer({
+    int? scheduleId,
+    required int routeId,
+    required int customerId,
+    required String skipReason,
+    String? skipNote,
+    required int workerId,
+  }) async {
+    return await _post('workerAuth.skipCustomer', {
+      if (scheduleId != null) 'scheduleId': scheduleId,
+      'routeId': routeId,
+      'customerId': customerId,
+      'skipReason': skipReason,
+      if (skipNote != null && skipNote.isNotEmpty) 'skipNote': skipNote,
+      'workerId': workerId,
+    });
+  }
+
+  // ─── Tranche 3: Supervisor schedule views ───────────────────────────────────
+
+  /// Area B: Fetch RRULE-expanded schedule events for a supervisor over a date range.
+  static Future<List<dynamic>> getSupervisorSchedule({
+    required int supervisorId,
+    required String from,
+    required String to,
+  }) async {
+    final data = await _get('workerAuth.getSupervisorSchedule', {
+      'supervisorId': supervisorId,
+      'from': from,
+      'to': to,
+    });
+    if (data is List) return data;
+    return [];
+  }
+
+  /// Area A: Fetch the effective (resolved) customer list for a route instance.
+  /// Uses calendarOverrides.getResolvedCustomersForInstance (protectedProcedure).
+  static Future<List<dynamic>> getResolvedCustomersForInstance(int instanceId) async {
+    final data = await _get(
+      'calendarOverrides.getResolvedCustomersForInstance',
+      {'instanceId': instanceId},
+    );
+    if (data is List) return data;
+    return [];
+  }
+
+  // ─── Tranche 3: Request Handoff ─────────────────────────────────────────────
+
+  /// Area D: Submit a handoff request for a schedule or instance.
+  static Future<Map<String, dynamic>> requestHandoff({
+    int? scheduleId,
+    int? instanceId,
+    required int supervisorId,
+    required String reason,
+  }) async {
+    return await _post('calendarOverrides.requestHandoff', {
+      if (scheduleId != null) 'scheduleId': scheduleId,
+      if (instanceId != null) 'instanceId': instanceId,
+      'supervisorId': supervisorId,
+      'reason': reason,
+    });
+  }
 }

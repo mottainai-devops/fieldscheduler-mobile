@@ -25,6 +25,10 @@ class NoAccessibleLotException implements Exception {
 /// would add latency for no practical benefit. Cache staleness is bounded to
 /// 30 minutes; a full re-login always resets the cache. This mirrors the
 /// identical rationale documented in WorkerMobile.tsx (Tranche 0 follow-up 4).
+///
+/// [forceRefresh] bypasses the 30-min gate by zeroing [_cachedAt] before
+/// delegating to [_maybeRefresh]. The gate still applies on the *next* resumed
+/// event — forceRefresh is not unconditionally expensive.
 class LotCache with WidgetsBindingObserver {
   static const _lotsKey = 'assignedLots';
   static const _cachedAtKey = 'lotCachedAt';

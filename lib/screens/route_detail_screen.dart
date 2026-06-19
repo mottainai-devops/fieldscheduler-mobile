@@ -33,7 +33,17 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
   bool _isOnline = true;
   final Set<int> _completedCustomerIds = {};
   final Set<int> _pickedCustomerIds = {};
+  final Set<int> _skippedCustomerIds = {};
   bool _isCompletingRoute = false;
+
+  // Area D: Handoff request state — button is disabled once submitted.
+  bool _handoffSubmitted = false;
+  bool _isRequestingHandoff = false;
+
+  // Area C: scheduleId resolved once on route entry via getScheduleIdForRoute.
+  // null = non-recurring route (skipCustomer will use the no-schedule path).
+  int? _scheduleId;
+  bool _scheduleIdResolved = false;
 
   @override
   void initState() {
@@ -66,9 +76,10 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
       final route = results[0] as Map<String, dynamic>;
       final customers = results[1] as List<dynamic>;
 
-      // Pre-populate completedCustomerIds and pickedCustomerIds from server data
+      // Pre-populate completedCustomerIds, pickedCustomerIds, skippedCustomerIds from server data
       final completed = <int>{};
       final picked = <int>{};
+      final skipped = <int>{};
       for (final c in customers) {
         final raw = c['customerId'] ?? c['id'];
         if (raw != null) {
@@ -76,6 +87,8 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
           if (id > 0) {
             if (c['completedAt'] != null) completed.add(id);
             if (c['pickedAt'] != null) picked.add(id);
+            // completionType='skipped' set by Tranche 0 Item 3
+            if (c['completionType'] == 'skipped') skipped.add(id);
           }
         }
       }
@@ -86,8 +99,15 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
           _customers = customers;
           _completedCustomerIds.addAll(completed);
           _pickedCustomerIds.addAll(picked);
+          _skippedCustomerIds.addAll(skipped);
           _isLoading = false;
         });
+      }
+
+      // Area C: Resolve scheduleId once after route data is loaded.
+      // Fire-and-forget — does not block the UI.
+      if (!_scheduleIdResolved) {
+        _resolveScheduleId();
       }
     } catch (e) {
       if (mounted) {
@@ -95,6 +115,136 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
           _error = e.toString().replaceFirst('Exception: ', '');
           _isLoading = false;
         });
+      }
+    }
+  }
+
+  /// Area C (H1): Resolve the active scheduleId for this route.
+  /// Runs once after _loadData completes. Result is stored in _scheduleId.
+  Future<void> _resolveScheduleId() async {
+    try {
+      final id = await ApiService.getScheduleIdForRoute(widget.routeId);
+      if (mounted) {
+        setState(() {
+          _scheduleId = id;
+          _scheduleIdResolved = true;
+        });
+      }
+    } catch (_) {
+      // Non-fatal — skip will use the no-schedule path
+      if (mounted) setState(() => _scheduleIdResolved = true);
+    }
+  }  // ─── Area D: Request Handoff ──────────────────────────────────────────────
+
+  static const _handoffReasons = [
+    ('illness',           'Illness / medical'),
+    ('vehicle_breakdown', 'Vehicle breakdown'),
+    ('overloaded',        'Route overloaded'),
+    ('emergency',         'Personal emergency'),
+    ('route_conflict',    'Route conflict / overlap'),
+    ('other',             'Other'),
+  ];
+
+  Future<void> _requestHandoff() async {
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) => _HandoffReasonDialog(reasons: _handoffReasons),
+    );
+    if (reason == null || !mounted) return;
+
+    final auth = context.read<AuthProvider>();
+    final supervisorId = auth.workerId ?? 0;
+
+    setState(() => _isRequestingHandoff = true);
+    try {
+      await ApiService.requestHandoff(
+        scheduleId: _scheduleId,
+        supervisorId: supervisorId,
+        reason: reason,
+      );
+      if (mounted) {
+        setState(() {
+          _handoffSubmitted = true;
+          _isRequestingHandoff = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Handoff request submitted'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isRequestingHandoff = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Handoff failed: ${e.toString().replaceFirst("Exception: ", "")}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // ─── Area C: Skip customer ──────────────────────────────────────────────────
+
+  static const _skipReasons = [
+    ('no_access',            'Gate locked / no access'),
+    ('customer_not_present', 'Customer not present'),
+    ('customer_request',     'Customer opt-out'),
+    ('bin_not_out',          'Bins not out'),
+    ('safety_concern',       'Safety / weather concern'),
+    ('permanent_moved',      'Permanent — customer moved out'),
+    ('permanent_closed',     'Permanent — business closed'),
+    ('other',                'Other (add note below)'),
+  ];
+
+  Future<void> _skipCustomer(Map<String, dynamic> customer) async {
+    final id = _extractCustomerId(customer);
+    if (id == 0) return;
+    final cd = customer['customer'] ?? customer;
+    final name = (cd['name'] ?? customer['customerName'] ?? 'Customer').toString();
+
+    // Show closed-picklist skip dialog
+    final result = await showDialog<({String reason, String? note})>(
+      context: context,
+      builder: (ctx) => _SkipDialog(customerName: name, reasons: _skipReasons),
+    );
+    if (result == null || !mounted) return;
+
+    final auth = context.read<AuthProvider>();
+    final workerId = auth.workerId ?? 0;
+
+    try {
+      await ApiService.skipCustomer(
+        scheduleId: _scheduleId,   // null → server uses no-schedule path
+        routeId: widget.routeId,
+        customerId: id,
+        skipReason: result.reason,
+        skipNote: result.note,
+        workerId: workerId,
+      );
+      if (mounted) {
+        setState(() {
+          _skippedCustomerIds.add(id);
+          _completedCustomerIds.add(id); // mark stop as visited
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Customer skipped'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Skip failed: ${e.toString().replaceFirst("Exception: ", "")}'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
@@ -383,6 +533,25 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
             icon: const Icon(Icons.refresh_rounded, color: Colors.white),
             onPressed: _loadData,
           ),
+          // Area D (I1): Request Handoff button — supervisor only, disabled after submit
+          Builder(builder: (ctx) {
+            final role = ctx.watch<AuthProvider>().workerRole ?? '';
+            if (role != 'supervisor') return const SizedBox.shrink();
+            return IconButton(
+              icon: _isRequestingHandoff
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                    )
+                  : Icon(
+                      Icons.swap_horiz_rounded,
+                      color: _handoffSubmitted ? Colors.grey : Colors.amber,
+                    ),
+              tooltip: _handoffSubmitted ? 'Handoff requested' : 'Request Handoff',
+              onPressed: (_handoffSubmitted || _isRequestingHandoff) ? null : _requestHandoff,
+            );
+          }),
         ],
       ),
       body: _isLoading
@@ -491,6 +660,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
           final cd = customer['customer'] ?? customer;
           final id = _extractCustomerId(customer);
           final isCompleted = _completedCustomerIds.contains(id);
+          final isSkipped = _skippedCustomerIds.contains(id);
           final name = (cd['name'] ?? customer['customerName'] ?? 'Customer').toString();
           final maf = (cd['customermaf'] ?? cd['maf'] ?? '').toString();
           final address = (cd['address'] ?? customer['buildingAddress'] ?? '').toString();
@@ -500,12 +670,18 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
           return Container(
             margin: const EdgeInsets.only(bottom: 10),
             decoration: BoxDecoration(
-              color: isCompleted ? Colors.green.withOpacity(0.12) : AppTheme.bgCard,
+              color: isSkipped
+                  ? Colors.orange.withOpacity(0.08)
+                  : isCompleted
+                      ? Colors.green.withOpacity(0.12)
+                      : AppTheme.bgCard,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: isCompleted
-                    ? Colors.green.withOpacity(0.4)
-                    : AppTheme.borderColor,
+                color: isSkipped
+                    ? Colors.orange.withOpacity(0.4)
+                    : isCompleted
+                        ? Colors.green.withOpacity(0.4)
+                        : AppTheme.borderColor,
               ),
             ),
             child: Column(
@@ -547,10 +723,14 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
                             Text(
                               name,
                               style: TextStyle(
-                                color: isCompleted ? Colors.green.shade300 : Colors.white,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 15,
-                                decoration: isCompleted ? TextDecoration.lineThrough : null,
+                          color: isSkipped
+                              ? Colors.orange.shade300
+                              : isCompleted
+                                  ? Colors.green.shade300
+                                  : Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                            decoration: isSkipped || isCompleted ? TextDecoration.lineThrough : null,
                               ),
                             ),
                             if (maf.isNotEmpty)
@@ -577,6 +757,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
                     final role = context.watch<AuthProvider>().workerRole ?? '';
                     final isSupervisor = role == 'supervisor';
                     final isPicked = _pickedCustomerIds.contains(id);
+                    final isAlreadySkipped = _skippedCustomerIds.contains(id);
                     return Padding(
                       padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                       child: Row(
@@ -632,10 +813,10 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
                                 ),
                               ),
                             )
-                          else
+                          else ...[  // supervisor path
                             Expanded(
                               child: OutlinedButton.icon(
-                                onPressed: isPicked ? null : () => _openPickupSubmission(customer),
+                                onPressed: (isPicked || isAlreadySkipped) ? null : () => _openPickupSubmission(customer),
                                 icon: Icon(
                                   isPicked ? Icons.check_circle : Icons.local_shipping,
                                   size: 14,
@@ -655,6 +836,33 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
                                 ),
                               ),
                             ),
+                            const SizedBox(width: 6),
+                            // Area C (H4): Skip button with closed picklist dialog
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: (isAlreadySkipped || isPicked)
+                                    ? null
+                                    : () => _skipCustomer(customer),
+                                icon: Icon(
+                                  isAlreadySkipped ? Icons.block : Icons.skip_next_rounded,
+                                  size: 14,
+                                ),
+                                label: Text(
+                                  isAlreadySkipped ? 'Skipped' : 'Skip',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: isAlreadySkipped ? Colors.grey : Colors.red.shade300,
+                                  side: BorderSide(
+                                    color: isAlreadySkipped
+                                        ? Colors.grey.withOpacity(0.3)
+                                        : Colors.red.withOpacity(0.4),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     );
@@ -687,6 +895,196 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Area C (H4): Skip reason dialog with closed picklist.
+///
+/// Presents the fixed list of skip reasons. The user must select one before
+/// confirming. An optional free-text note field is shown for all reasons but
+/// is mandatory only when reason == 'other'.
+class _SkipDialog extends StatefulWidget {
+  final String customerName;
+  final List<(String, String)> reasons;
+
+  const _SkipDialog({required this.customerName, required this.reasons});
+
+  @override
+  State<_SkipDialog> createState() => _SkipDialogState();
+}
+
+class _SkipDialogState extends State<_SkipDialog> {
+  String? _selectedReason;
+  final _noteController = TextEditingController();
+
+  @override
+  void dispose() {
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  bool get _canConfirm {
+    if (_selectedReason == null) return false;
+    if (_selectedReason == 'other' && _noteController.text.trim().isEmpty) return false;
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1E2530),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Skip Customer',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            widget.customerName,
+            style: const TextStyle(color: Colors.white54, fontSize: 13),
+          ),
+        ],
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Reason',
+              style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            ...widget.reasons.map(((String, String) r) {
+              final (code, label) = r;
+              return RadioListTile<String>(
+                value: code,
+                groupValue: _selectedReason,
+                onChanged: (v) => setState(() => _selectedReason = v),
+                title: Text(label, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                activeColor: const Color(0xFF4CAF50),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              );
+            }),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _noteController,
+              style: const TextStyle(color: Colors.white),
+              maxLines: 2,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: _selectedReason == 'other'
+                    ? 'Note (required for Other)'
+                    : 'Note (optional)',
+                hintStyle: const TextStyle(color: Colors.white38),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.05),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+        ),
+        ElevatedButton(
+          onPressed: _canConfirm
+              ? () => Navigator.pop(
+                    context,
+                    (reason: _selectedReason!, note: _noteController.text.trim().isEmpty
+                        ? null
+                        : _noteController.text.trim()),
+                  )
+              : null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.red.shade700,
+            disabledBackgroundColor: Colors.red.withOpacity(0.3),
+          ),
+          child: const Text('Skip', style: TextStyle(color: Colors.white)),
+        ),
+      ],
+    );
+  }
+}
+
+/// Area D (I1): Handoff reason selection dialog.
+///
+/// Simple single-select picklist. Confirm is disabled until a reason is chosen.
+class _HandoffReasonDialog extends StatefulWidget {
+  final List<(String, String)> reasons;
+  const _HandoffReasonDialog({required this.reasons});
+
+  @override
+  State<_HandoffReasonDialog> createState() => _HandoffReasonDialogState();
+}
+
+class _HandoffReasonDialogState extends State<_HandoffReasonDialog> {
+  String? _selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1E2530),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text(
+        'Request Handoff',
+        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Select a reason for the handoff request:',
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            ...widget.reasons.map(((String, String) r) {
+              final (code, label) = r;
+              return RadioListTile<String>(
+                value: code,
+                groupValue: _selected,
+                onChanged: (v) => setState(() => _selected = v),
+                title: Text(label, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                activeColor: Colors.amber,
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              );
+            }),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+        ),
+        ElevatedButton(
+          onPressed: _selected != null
+              ? () => Navigator.pop(context, _selected)
+              : null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.amber.shade700,
+            disabledBackgroundColor: Colors.amber.withOpacity(0.3),
+          ),
+          child: const Text('Submit', style: TextStyle(color: Colors.white)),
+        ),
+      ],
     );
   }
 }

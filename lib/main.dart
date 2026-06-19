@@ -23,6 +23,8 @@ import 'screens/profile_screen.dart';
 import 'screens/notifications_screen.dart';
 import 'screens/report_violation_screen.dart';
 import 'screens/supervisor_login_screen.dart';
+import 'screens/today_routes_screen.dart';
+import 'screens/week_schedule_screen.dart';
 import 'services/api_service.dart';
 
 /// B6: Shared navigator key wired into both GoRouter and ApiService so the
@@ -189,6 +191,16 @@ class FieldWorkerApp extends StatelessWidget {
         GoRoute(
           path: '/pending-pickups',
           builder: (context, state) => const PendingPickupsScreen(),
+        ),
+        // Area A (F1-F4): Supervisor Today view
+        GoRoute(
+          path: '/supervisor-today',
+          builder: (context, state) => const TodayRoutesScreen(),
+        ),
+        // Area B (G1-G3): Supervisor Week view
+        GoRoute(
+          path: '/supervisor-week',
+          builder: (context, state) => const WeekScheduleScreen(),
         ),
       ],
     );
