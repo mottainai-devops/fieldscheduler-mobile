@@ -1,6 +1,17 @@
 import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+/// Thrown by the 401 interceptor so callers can distinguish session expiry
+/// from other errors.
+class SessionExpiredException implements Exception {
+  final String message;
+  const SessionExpiredException([this.message = 'Session expired']);
+  @override
+  String toString() => message;
+}
 
 class ApiService {
   static const String baseUrl = 'https://app.fieldscheduler.net/api/trpc';
@@ -8,9 +19,34 @@ class ApiService {
   static const String workerIdKey = 'worker_id';
   static const String workerNameKey = 'worker_name';
 
+  static const _secureStorage = FlutterSecureStorage();
+
+  // ─── Navigator key for 401 redirect ─────────────────────────────────────────
+  // Callers must assign this in main() so the interceptor can navigate without
+  // a BuildContext.
+  static GlobalKey<NavigatorState>? navigatorKey;
+
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
+  /// Build headers for a request.
+  ///
+  /// Area B (D1): surveyToken is read LIVE from flutter_secure_storage at
+  /// request time, not from a cached field. This ensures that after a
+  /// re-login the very next request carries the fresh token.
+  ///
+  /// Branching:
+  ///   - Supervisor path: surveyToken present → Authorization: Bearer <token>
+  ///   - Field manager path: Cookie session present → Cookie: <session>
   static Future<Map<String, String>> _getHeaders() async {
+    // D1: read token live from secure storage on every request
+    final surveyToken = await _secureStorage.read(key: 'workerSurveyToken');
+    if (surveyToken != null && surveyToken.isNotEmpty) {
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $surveyToken',
+      };
+    }
+    // Field manager path — Cookie session
     final prefs = await SharedPreferences.getInstance();
     final session = prefs.getString(sessionKey) ?? '';
     return {
@@ -19,11 +55,27 @@ class ApiService {
     };
   }
 
+  /// Central 401 interceptor.
+  ///
+  /// B6: On 401, clears ONLY the surveyToken from secure storage.
+  /// SharedPreferences (sessionKind, assignedLots, pending queue) is
+  /// intentionally preserved so Tranche 2 offline queue state survives.
+  static Future<void> _handle401() async {
+    await _secureStorage.delete(key: 'workerSurveyToken');
+    // Navigate to select-worker if a navigator key is wired up
+    navigatorKey?.currentState?.pushNamedAndRemoveUntil(
+      '/select-worker',
+      (route) => false,
+    );
+    throw const SessionExpiredException('Session expired, please sign in again');
+  }
+
   static Future<dynamic> _get(String procedure, Map<String, dynamic> input) async {
     final inputJson = Uri.encodeComponent(jsonEncode({'json': input}));
     final url = Uri.parse('$baseUrl/$procedure?input=$inputJson');
     final headers = await _getHeaders();
     final response = await http.get(url, headers: headers);
+    if (response.statusCode == 401) await _handle401();
     return _handleResponse(response);
   }
 
@@ -35,6 +87,7 @@ class ApiService {
       headers: headers,
       body: jsonEncode({'json': input}),
     );
+    if (response.statusCode == 401) await _handle401();
     return _handleResponse(response);
   }
 
@@ -55,6 +108,17 @@ class ApiService {
 
   static Future<List<dynamic>> getAllWorkers() async {
     return await _get('workerAuth.getAllWorkers', {});
+  }
+
+  static Future<Map<String, dynamic>> supervisorLogin({
+    required String email,
+    required String password, // already base64-encoded by caller
+  }) async {
+    // Uses supervisorLogin (mutation) — returns {surveyToken, worker, assignedLots}
+    return await _post('workerAuth.supervisorLogin', {
+      'email': email,
+      'password': password,
+    });
   }
 
   static Future<Map<String, dynamic>> loginWithPin(int workerId, String pin) async {
@@ -96,11 +160,22 @@ class ApiService {
     return await _get('workerAuth.me', {});
   }
 
+  /// Fetch the enriched assigned-lots list for the current supervisor session.
+  /// Returns a list of lot objects with paytWebhook, monthlyWebhook, lotId, lotNumber.
+  static Future<List<dynamic>> getAssignedLots(String surveyToken) async {
+    final result = await _get('workerAuth.getAssignedLots', {'surveyToken': surveyToken});
+    if (result is List) return result;
+    if (result is Map && result.containsKey('lots')) return result['lots'] as List;
+    return [];
+  }
+
   static Future<void> logout() async {
     try {
       await _post('workerAuth.logout', {});
     } catch (_) {}
     await clearSession();
+    // Also clear the supervisor token on explicit logout
+    await _secureStorage.delete(key: 'workerSurveyToken');
   }
 
   // ─── Routes ──────────────────────────────────────────────────────────────────
@@ -361,43 +436,6 @@ class ApiService {
   }
 
   // ─── Pickup Submission ───────────────────────────────────────────────────────
-
-  /// Submit a pickup record to the survey backend and mark the customer as picked
-  /// in the fieldscheduler backend.
-  static Future<void> submitPickup({
-    required int routeId,
-    required int customerId,
-    required String supervisorId,
-    required String binType,
-    required int binQuantity,
-    required String beforePhotoBase64,
-    required String afterPhotoBase64,
-    String incidentReport = '',
-    String customerName = '',
-    String customerPhone = '',
-    String customerAddress = '',
-    String mafCode = '',
-    String buildingId = '',
-    String unitCode = '',
-  }) async {
-    // 1. Submit to survey backend via fieldscheduler proxy
-    await _post('workerAuth.submitPickup', {
-      'routeId': routeId,
-      'customerId': customerId,
-      'supervisorId': supervisorId,
-      'binType': binType,
-      'binQuantity': binQuantity,
-      'beforePhotoBase64': beforePhotoBase64,
-      'afterPhotoBase64': afterPhotoBase64,
-      'incidentReport': incidentReport,
-      'customerName': customerName,
-      'customerPhone': customerPhone,
-      'customerAddress': customerAddress,
-      'mafCode': mafCode,
-      'buildingId': buildingId,
-      'unitCode': unitCode,
-    });
-  }
 
   /// Mark a customer as picked (sets pickedAt timestamp) in the fieldscheduler DB
   static Future<void> markCustomerPicked(int routeId, int customerId) async {

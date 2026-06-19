@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'providers/auth_provider.dart';
 import 'providers/route_provider.dart';
 import 'providers/notification_provider.dart';
+import 'services/lot_cache.dart';
 
 import 'screens/pin_login_screen.dart';
 import 'screens/worker_select_screen.dart';
@@ -17,9 +18,14 @@ import 'screens/optimized_route_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/notifications_screen.dart';
 import 'screens/report_violation_screen.dart';
+import 'screens/supervisor_login_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // C2: Register LotCache as a WidgetsBindingObserver so AppLifecycleState.resumed
+  // triggers a conditional refresh (30-min gate).
+  lotCache.register();
+  await lotCache.loadFromPrefs();
   runApp(const FieldWorkerApp());
 }
 
@@ -73,7 +79,7 @@ class FieldWorkerApp extends StatelessWidget {
       redirect: (context, state) {
         final isLoggedIn = auth.isLoggedIn;
         final loc = state.matchedLocation;
-        final isAuthPage = loc == '/select-worker' || loc == '/pin';
+        final isAuthPage = loc == '/select-worker' || loc == '/pin' || loc == '/supervisor-login';
         if (!isLoggedIn && !isAuthPage) return '/select-worker';
         if (isLoggedIn && isAuthPage) return '/home';
         return null;
@@ -86,6 +92,10 @@ class FieldWorkerApp extends StatelessWidget {
         GoRoute(
           path: '/pin',
           builder: (context, state) => const PinLoginScreen(),
+        ),
+        GoRoute(
+          path: '/supervisor-login',
+          builder: (context, state) => const SupervisorLoginScreen(),
         ),
         GoRoute(
           path: '/home',

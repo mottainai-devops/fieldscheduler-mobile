@@ -1,15 +1,30 @@
-import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../providers/auth_provider.dart';
-import '../services/api_service.dart';
+import '../services/lot_cache.dart';
 import '../utils/theme.dart';
 
 /// Pickup submission screen for supervisors.
-/// Pre-fills customer data from the route customer record and collects
-/// bin type, bin quantity, before/after photos, and an optional incident report.
+///
+/// Area D (§4): Submits the full Survey App schema directly to the resolved
+/// webhook URL via http.MultipartRequest — NOT via the workerAuth.submitPickup
+/// tRPC proxy.
+///
+/// Key changes from the previous version:
+///   D1  — Authorization: Bearer header is attached by ApiService._getHeaders()
+///          at request time; no change needed here.
+///   D3  — Full provenance payload per §4.1 (userId, companyId, companyName,
+///          lotCode, lotName, socioClass, submittedFrom, supervisorId, etc.)
+///   D4  — Null omission helper skips null / empty / "null" / "undefined" values.
+///   D5  — Webhook URL resolved from cached lot by customerType (billing type):
+///          monthlyBilling → monthlyWebhook, otherwise → paytWebhook.
+///   BIN — Seven Survey App bin types; wheelieBinType sub-dropdown shown when
+///          the selected bin type is a wheelie variant.
 class PickupSubmissionScreen extends StatefulWidget {
   final int routeId;
   final int customerId;
@@ -31,19 +46,33 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
   final _incidentController = TextEditingController();
   final _binQtyController = TextEditingController(text: '1');
 
-  String _binType = 'Wheelie Bin';
-  File? _beforePhoto;
-  File? _afterPhoto;
-  bool _isSubmitting = false;
-  String? _error;
-
+  // D3: Seven Survey App bin types (§4.1)
   static const List<String> _binTypes = [
-    'Wheelie Bin',
+    'Wheelie Bin 120L',
+    'Wheelie Bin 240L',
+    'Wheelie Bin 360L',
     'Bag',
     'Skip',
     'Container',
     'Other',
   ];
+
+  // Wheelie sub-types shown only when a wheelie variant is selected
+  static const List<String> _wheelieBinSubTypes = [
+    'Residential',
+    'Commercial',
+  ];
+
+  static bool _isWheelieType(String t) => t.startsWith('Wheelie Bin');
+
+  String _binType = 'Wheelie Bin 120L';
+  String _wheelieBinType = 'Residential';
+  File? _beforePhoto;
+  File? _afterPhoto;
+  bool _isSubmitting = false;
+  String? _error;
+
+  // ─── Customer field accessors ────────────────────────────────────────────────
 
   Map<String, dynamic> get _cd => widget.customer['customer'] ?? widget.customer;
 
@@ -56,6 +85,21 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
   String get _buildingId =>
       (_cd['buildingId'] ?? _cd['arcgisBuildingId'] ?? '').toString();
   String get _unitCode => (_cd['unitCode'] ?? '').toString();
+  String get _socioClass => (_cd['socioClass'] ?? '').toString();
+
+  /// D3: customerType sourced from the customer record's billing type,
+  /// not the supervisor's global preference.
+  String get _customerType =>
+      (_cd['customerType'] ?? _cd['billingType'] ?? _cd['type'] ?? '').toString();
+
+  /// D3: composite customerId = "${arcgisBuildingId}-${unitCode}" with HYPHEN.
+  /// Falls back to String(customer.id) only if either component is null/empty.
+  String get _compositeCustomerId {
+    final bId = _buildingId;
+    final uCode = _unitCode;
+    if (bId.isNotEmpty && uCode.isNotEmpty) return '$bId-$uCode';
+    return widget.customerId.toString();
+  }
 
   @override
   void dispose() {
@@ -64,11 +108,13 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
     super.dispose();
   }
 
+  // ─── Photo picker ────────────────────────────────────────────────────────────
+
   Future<void> _pickPhoto(bool isBefore) async {
     final picker = ImagePicker();
     final picked = await picker.pickImage(
       source: ImageSource.camera,
-      imageQuality: 70,
+      imageQuality: 80,
       maxWidth: 1280,
     );
     if (picked == null) return;
@@ -81,10 +127,24 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
     });
   }
 
-  Future<String> _toBase64(File file) async {
-    final bytes = await file.readAsBytes();
-    return base64Encode(bytes);
+  // ─── D4: Null omission helper ────────────────────────────────────────────────
+
+  /// Returns true if the value should be omitted from the multipart payload.
+  static bool _isBlank(dynamic v) {
+    if (v == null) return true;
+    final s = v.toString().trim();
+    return s.isEmpty || s == 'null' || s == 'undefined';
   }
+
+  /// Add a field to the multipart request only if it is non-blank.
+  static void _addField(
+      http.MultipartRequest req, String key, dynamic value) {
+    if (!_isBlank(value)) {
+      req.fields[key] = value.toString().trim();
+    }
+  }
+
+  // ─── Submit ──────────────────────────────────────────────────────────────────
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
@@ -104,32 +164,92 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
 
     try {
       final auth = context.read<AuthProvider>();
-      final supervisorId = auth.workerName ?? 'Supervisor';
+
+      // ── D5: Resolve webhook URL from cached lot by customerType ──────────────
+      // C3: On cache miss, NoAccessibleLotException is thrown — no fallback.
+      final lot = lotCache.resolveByMafCode(_mafCode);
+
+      // D5: Route by billing type — monthlyBilling customers → monthlyWebhook
+      final isMonthly = _customerType.toLowerCase().contains('monthly') ||
+          (_cd['monthlyBilling'] == true);
+      final webhookUrl = isMonthly
+          ? (lot['monthlyWebhook'] as String?)
+          : (lot['paytWebhook'] as String?);
+
+      if (webhookUrl == null || webhookUrl.isEmpty) {
+        throw Exception(
+            'No webhook URL found for this lot (lotCode=${lot['lotCode']}). '
+            'Contact your administrator.');
+      }
+
+      // ── D3: Build the full multipart request ─────────────────────────────────
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getString('worker_email') ??
+          auth.workerEmail ??
+          auth.workerId?.toString() ??
+          '';
+      final companyId = prefs.getString('companyId') ?? auth.companyId ?? '';
+      final companyName = prefs.getString('companyName') ?? auth.companyName ?? '';
+      final supervisorFullName = auth.workerName ?? 'Supervisor';
       final qty = int.tryParse(_binQtyController.text.trim()) ?? 1;
 
-      final beforeB64 = await _toBase64(_beforePhoto!);
-      final afterB64 = await _toBase64(_afterPhoto!);
+      final uri = Uri.parse(webhookUrl);
+      final req = http.MultipartRequest('POST', uri);
 
-      await ApiService.submitPickup(
-        routeId: widget.routeId,
-        customerId: widget.customerId,
-        supervisorId: supervisorId,
-        binType: _binType,
-        binQuantity: qty,
-        beforePhotoBase64: beforeB64,
-        afterPhotoBase64: afterB64,
-        incidentReport: _incidentController.text.trim(),
-        customerName: _customerName,
-        customerPhone: _customerPhone,
-        customerAddress: _customerAddress,
-        mafCode: _mafCode,
-        buildingId: _buildingId,
-        unitCode: _unitCode,
-      );
+      // Core identity fields
+      _addField(req, 'userId', userId);
+      _addField(req, 'companyId', companyId);
+      _addField(req, 'companyName', companyName);
+      _addField(req, 'supervisorId', supervisorFullName);
+      _addField(req, 'submittedFrom', 'FieldWorker');
+
+      // Lot fields
+      _addField(req, 'lotCode', lot['lotCode']);
+      _addField(req, 'lotName', lot['lotName']);
+
+      // Customer fields
+      _addField(req, 'customerId', _compositeCustomerId);
+      _addField(req, 'customerName', _customerName);
+      _addField(req, 'customerPhone', _customerPhone);
+      _addField(req, 'customerAddress', _customerAddress);
+      _addField(req, 'mafCode', _mafCode);
+      _addField(req, 'buildingId', _buildingId);
+      _addField(req, 'unitCode', _unitCode);
+      _addField(req, 'customerType', _customerType);
+      _addField(req, 'socioClass', _socioClass);
+
+      // Bin fields
+      _addField(req, 'binType', _binType);
+      if (_isWheelieType(_binType)) {
+        _addField(req, 'wheelieBinType', _wheelieBinType);
+      }
+      _addField(req, 'binQuantity', qty);
+
+      // Incident report (optional)
+      _addField(req, 'incidentReport', _incidentController.text.trim());
+
+      // Photos as multipart files
+      req.files.add(await http.MultipartFile.fromPath(
+          'beforePhoto', _beforePhoto!.path));
+      req.files.add(await http.MultipartFile.fromPath(
+          'afterPhoto', _afterPhoto!.path));
+
+      final streamed = await req.send();
+      final response = await http.Response.fromStream(streamed);
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw Exception(
+            'Survey App returned ${response.statusCode}: ${response.body}');
+      }
 
       if (mounted) {
         Navigator.pop(context, true); // true = success, caller marks as Picked
       }
+    } on NoAccessibleLotException catch (e) {
+      setState(() {
+        _error = e.message;
+        _isSubmitting = false;
+      });
     } catch (e) {
       setState(() {
         _error = e.toString().replaceFirst('Exception: ', '');
@@ -137,6 +257,8 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
       });
     }
   }
+
+  // ─── Build ───────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -166,6 +288,10 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
               if (_mafCode.isNotEmpty) _infoRow('MAF Code', _mafCode),
               if (_buildingId.isNotEmpty)
                 _infoRow('Building ID', _buildingId),
+              if (_customerType.isNotEmpty)
+                _infoRow('Customer Type', _customerType),
+              if (_socioClass.isNotEmpty)
+                _infoRow('Socio Class', _socioClass),
               const SizedBox(height: 20),
 
               // ── Bin Details ────────────────────────────────────────────────
@@ -185,6 +311,25 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
                     .toList(),
                 onChanged: (v) => setState(() => _binType = v ?? _binType),
               ),
+              // Wheelie sub-type — shown only for wheelie variants
+              if (_isWheelieType(_binType)) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: _wheelieBinType,
+                  dropdownColor: AppTheme.bgCard,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: _inputDecoration('Wheelie Bin Type'),
+                  items: _wheelieBinSubTypes
+                      .map((t) => DropdownMenuItem(
+                            value: t,
+                            child: Text(t,
+                                style: const TextStyle(color: Colors.white)),
+                          ))
+                      .toList(),
+                  onChanged: (v) =>
+                      setState(() => _wheelieBinType = v ?? _wheelieBinType),
+                ),
+              ],
               const SizedBox(height: 12),
               TextFormField(
                 controller: _binQtyController,
@@ -193,7 +338,8 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
                 decoration: _inputDecoration('Bin Quantity'),
                 validator: (v) {
                   if (v == null || v.trim().isEmpty) return 'Required';
-                  if (int.tryParse(v.trim()) == null || int.parse(v.trim()) < 1) {
+                  if (int.tryParse(v.trim()) == null ||
+                      int.parse(v.trim()) < 1) {
                     return 'Enter a valid quantity';
                   }
                   return null;
@@ -285,6 +431,8 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
     );
   }
 
+  // ─── Helpers ─────────────────────────────────────────────────────────────────
+
   Widget _sectionLabel(String text) => Padding(
         padding: const EdgeInsets.only(bottom: 4),
         child: Text(
@@ -304,7 +452,7 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             SizedBox(
-              width: 90,
+              width: 100,
               child: Text(label,
                   style: const TextStyle(
                       color: AppTheme.textSecondary, fontSize: 13)),

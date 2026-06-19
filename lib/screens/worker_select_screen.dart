@@ -149,8 +149,20 @@ class _WorkerSelectScreenState extends State<WorkerSelectScreen> {
                           },
                         ),
             ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: TextButton.icon(
+                onPressed: () => context.go('/supervisor-login'),
+                icon: const Icon(Icons.supervisor_account,
+                    color: Color(0xFF90CAF9), size: 18),
+                label: const Text(
+                  'Supervisor Mode',
+                  style: TextStyle(color: Color(0xFF90CAF9), fontSize: 14),
+                ),
+              ),
+            ),
             const Padding(
-              padding: EdgeInsets.all(16),
+              padding: EdgeInsets.only(bottom: 16),
               child: Text(
                 '© 2025 Field Scheduler',
                 style: TextStyle(color: Colors.white30, fontSize: 12),
