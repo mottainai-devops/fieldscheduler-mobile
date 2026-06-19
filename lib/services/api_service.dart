@@ -1,8 +1,12 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+import '../providers/auth_provider.dart';
 
 /// Thrown by the 401 interceptor so callers can distinguish session expiry
 /// from other errors.
@@ -57,16 +61,25 @@ class ApiService {
 
   /// Central 401 interceptor.
   ///
-  /// B6: On 401, clears ONLY the surveyToken from secure storage.
-  /// SharedPreferences (sessionKind, assignedLots, pending queue) is
-  /// intentionally preserved so Tranche 2 offline queue state survives.
+  /// B6: On 401:
+  ///   1. Clears ONLY the surveyToken from secure storage. SharedPreferences
+  ///      (sessionKind, assignedLots, pending queue) is intentionally preserved
+  ///      so Tranche 2 offline queue state survives.
+  ///   2. Calls clearIdentityOnly() on AuthProvider so in-memory supervisor
+  ///      state is cleared (sessionKind still says 'supervisor' until this runs).
+  ///   3. Navigates to /supervisor-login via go_router using the shared
+  ///      navigatorKey. Uses context.go() which is go_router-compatible.
   static Future<void> _handle401() async {
     await _secureStorage.delete(key: 'workerSurveyToken');
-    // Navigate to select-worker if a navigator key is wired up
-    navigatorKey?.currentState?.pushNamedAndRemoveUntil(
-      '/select-worker',
-      (route) => false,
-    );
+    // B6: clear in-memory supervisor state via AuthProvider
+    final ctx = navigatorKey?.currentContext;
+    if (ctx != null) {
+      try {
+        ctx.read<AuthProvider>().clearIdentityOnly();
+      } catch (_) {}
+      // B6: navigate to supervisor-login using go_router-compatible go()
+      ctx.go('/supervisor-login');
+    }
     throw const SessionExpiredException('Session expired, please sign in again');
   }
 

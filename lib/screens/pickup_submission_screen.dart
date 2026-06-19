@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
@@ -16,8 +17,8 @@ import '../utils/theme.dart';
 /// tRPC proxy.
 ///
 /// Key changes from the previous version:
-///   D1  — Authorization: Bearer header is attached by ApiService._getHeaders()
-///          at request time; no change needed here.
+///   D1  — Authorization: Bearer header is attached to the MultipartRequest
+///          via _attachAuth() which reads the token live from secure storage.
 ///   D3  — Full provenance payload per §4.1 (userId, companyId, companyName,
 ///          lotCode, lotName, socioClass, submittedFrom, supervisorId, etc.)
 ///   D4  — Null omission helper skips null / empty / "null" / "undefined" values.
@@ -127,6 +128,19 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
     });
   }
 
+  // ─── D1: Auth helper ──────────────────────────────────────────────────────────
+
+  /// D1: Attach Authorization: Bearer header to a MultipartRequest by reading
+  /// the supervisor token live from flutter_secure_storage at submit time.
+  /// No-op if no token is present (field-manager path).
+  static Future<void> _attachAuth(http.MultipartRequest req) async {
+    const storage = FlutterSecureStorage();
+    final token = await storage.read(key: 'workerSurveyToken');
+    if (token != null && token.isNotEmpty) {
+      req.headers['Authorization'] = 'Bearer $token';
+    }
+  }
+
   // ─── D4: Null omission helper ────────────────────────────────────────────────
 
   /// Returns true if the value should be omitted from the multipart payload.
@@ -184,7 +198,10 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
 
       // ── D3: Build the full multipart request ─────────────────────────────────
       final prefs = await SharedPreferences.getInstance();
-      final userId = prefs.getString('worker_email') ??
+      // D3/Fix2: userId must be the Survey App userId (persisted on login),
+      // NOT the worker email. Falls back to email only if not yet persisted.
+      final userId = prefs.getString('surveyAppUserId') ??
+          prefs.getString('worker_email') ??
           auth.workerEmail ??
           auth.workerId?.toString() ??
           '';
@@ -192,9 +209,18 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
       final companyName = prefs.getString('companyName') ?? auth.companyName ?? '';
       final supervisorFullName = auth.workerName ?? 'Supervisor';
       final qty = int.tryParse(_binQtyController.text.trim()) ?? 1;
+      // D3/Fix2: Four missing provenance fields
+      final customerEmail = (_cd['email'] ?? _cd['customerEmail'] ?? '').toString();
+      final latitude = (_cd['latitude'] ?? _cd['lat'] ?? '').toString();
+      final longitude = (_cd['longitude'] ?? _cd['lng'] ?? _cd['lon'] ?? '').toString();
+      // pickUpDate defaults to today in ISO-8601 format
+      final pickUpDate = DateTime.now().toIso8601String().substring(0, 10);
 
       final uri = Uri.parse(webhookUrl);
       final req = http.MultipartRequest('POST', uri);
+
+      // D1/Fix1: Attach Authorization: Bearer header from live secure-storage read
+      await _attachAuth(req);
 
       // Core identity fields
       _addField(req, 'userId', userId);
@@ -224,6 +250,12 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
         _addField(req, 'wheelieBinType', _wheelieBinType);
       }
       _addField(req, 'binQuantity', qty);
+
+      // D3/Fix2: Four missing provenance fields
+      _addField(req, 'customerEmail', customerEmail);
+      _addField(req, 'latitude', latitude);
+      _addField(req, 'longitude', longitude);
+      _addField(req, 'pickUpDate', pickUpDate);
 
       // Incident report (optional)
       _addField(req, 'incidentReport', _incidentController.text.trim());

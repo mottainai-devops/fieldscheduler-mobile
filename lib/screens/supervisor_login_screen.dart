@@ -72,6 +72,12 @@ class _SupervisorLoginScreenState extends State<SupervisorLoginScreen> {
       await prefs.setInt('fieldworkerId', (worker['id'] as num).toInt());
       await prefs.setInt('tokenIssuedAt', DateTime.now().millisecondsSinceEpoch);
       await prefs.setString('assignedLots', jsonEncode(assignedLots));
+      // D3/Fix2: Persist the Survey App userId so pickup_submission_screen can
+      // use it as the payload's userId (not the worker email).
+      final surveyAppUserId = (worker['userId'] ?? worker['_id'] ?? worker['id']?.toString() ?? '').toString();
+      if (surveyAppUserId.isNotEmpty) {
+        await prefs.setString('surveyAppUserId', surveyAppUserId);
+      }
 
       // ── C1: Seed LotCache from login response ─────────────────────────────────
       await lotCache.seedFromLogin(assignedLots);

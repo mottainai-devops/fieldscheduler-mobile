@@ -19,9 +19,16 @@ import 'screens/profile_screen.dart';
 import 'screens/notifications_screen.dart';
 import 'screens/report_violation_screen.dart';
 import 'screens/supervisor_login_screen.dart';
+import 'services/api_service.dart';
+
+/// B6: Shared navigator key wired into both GoRouter and ApiService so the
+/// 401 interceptor can navigate without a BuildContext.
+final _appNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // B6: Wire the shared navigator key into ApiService before any request is made.
+  ApiService.navigatorKey = _appNavigatorKey;
   // C2: Register LotCache as a WidgetsBindingObserver so AppLifecycleState.resumed
   // triggers a conditional refresh (30-min gate).
   lotCache.register();
@@ -75,6 +82,8 @@ class FieldWorkerApp extends StatelessWidget {
 
   GoRouter _buildRouter(AuthProvider auth) {
     return GoRouter(
+      // B6: Shared navigator key so ApiService._handle401() can call context.go()
+      navigatorKey: _appNavigatorKey,
       initialLocation: '/select-worker',
       redirect: (context, state) {
         final isLoggedIn = auth.isLoggedIn;
