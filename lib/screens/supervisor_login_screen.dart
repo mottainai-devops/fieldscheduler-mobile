@@ -74,7 +74,7 @@ class _SupervisorLoginScreenState extends State<SupervisorLoginScreen> {
       await prefs.setString('assignedLots', jsonEncode(assignedLots));
       // D3/Fix2: Persist the Survey App userId so pickup_submission_screen can
       // use it as the payload's userId (not the worker email).
-      final surveyAppUserId = (worker['userId'] ?? worker['_id'] ?? worker['id']?.toString() ?? '').toString();
+      final surveyAppUserId = (worker['surveyAppUserId'] ?? worker['userId'] ?? worker['_id'] ?? worker['id']?.toString() ?? '').toString();
       if (surveyAppUserId.isNotEmpty) {
         await prefs.setString('surveyAppUserId', surveyAppUserId);
       }
