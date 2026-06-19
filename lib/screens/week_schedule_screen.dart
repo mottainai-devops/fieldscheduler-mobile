@@ -306,7 +306,7 @@ class _WeekScheduleScreenState extends State<WeekScheduleScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
-                padding: const EdgeInsets.only(bottom: 8, top: i > 0 ? 16 : 0),
+                padding: EdgeInsets.only(bottom: 8, top: i > 0 ? 16 : 0),
                 child: Text(
                   date,
                   style: TextStyle(
