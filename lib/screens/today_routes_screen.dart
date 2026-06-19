@@ -68,7 +68,7 @@ class _TodayRoutesScreenState extends State<TodayRoutesScreen> {
 
       // B1 fix: use the global lotCache singleton — LotCache is NOT registered
       // as a Provider; it is a module-level singleton from lot_cache.dart.
-      final events = <_TodayEvent>();
+      final events = <_TodayEvent>[];
 
       for (final e in rawEvents) {
         final ev = Map<String, dynamic>.from(e as Map);
@@ -456,10 +456,11 @@ class _CustomerTile extends StatelessWidget {
   Widget build(BuildContext context) {
     // F4 (Cleanup 1): Tap navigates to CustomerDetailScreen
     return InkWell(
-      onTap: () => Navigator.pushNamed(
-        context,
-        '/customers/${customer.customerId}',
-        arguments: {'routeId': customer.routeId ?? 0},
+      // F4 fix: use context.push (go_router) — Navigator.pushNamed does not
+      // resolve GoRoutes. routeId is passed as a query param because
+      // main.dart:156 reads state.uri.queryParameters['routeId'].
+      onTap: () => context.push(
+        '/customers/${customer.customerId}?routeId=${customer.routeId ?? 0}',
       ),
       borderRadius: BorderRadius.circular(6),
       child: Padding(

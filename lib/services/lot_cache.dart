@@ -26,9 +26,14 @@ class NoAccessibleLotException implements Exception {
 /// 30 minutes; a full re-login always resets the cache. This mirrors the
 /// identical rationale documented in WorkerMobile.tsx (Tranche 0 follow-up 4).
 ///
-/// [forceRefresh] bypasses the 30-min gate by zeroing [_cachedAt] before
-/// delegating to [_maybeRefresh]. The gate still applies on the *next* resumed
-/// event — forceRefresh is not unconditionally expensive.
+/// [forceRefresh] zeroes [_cachedAt] and then calls [_maybeRefresh] immediately.
+/// Because [_cachedAt] is 0, the 30-min gate inside [_maybeRefresh] always
+/// passes, so a network refresh fires on every call. When [SyncCoordinator]
+/// calls [forceRefresh] on every [AppLifecycleState.resumed] event, the gate
+/// is effectively bypassed — refreshes fire every resume. This is intentional:
+/// webhook URLs change rarely and the payload is small, so the cost is low.
+/// If a true gated path is needed later, add a separate `maybeRefresh()` that
+/// does NOT zero [_cachedAt] and have [SyncCoordinator] call that instead.
 class LotCache with WidgetsBindingObserver {
   static const _lotsKey = 'assignedLots';
   static const _cachedAtKey = 'lotCachedAt';
@@ -107,7 +112,12 @@ class LotCache with WidgetsBindingObserver {
     }
   }
 
-  /// Force a refresh regardless of cache age (e.g. after a successful pickup).
+  /// Zeroes [_cachedAt] and triggers an immediate network refresh.
+  ///
+  /// Note: each call re-zeroes [_cachedAt] before the 30-min gate inside
+  /// [_maybeRefresh] is checked, so the gate is always bypassed here.
+  /// When called from [SyncCoordinator] on every resume, refreshes fire
+  /// every resume — acceptable because webhook URLs change rarely.
   Future<void> forceRefresh() async {
     _cachedAt = 0;
     await _maybeRefresh();
