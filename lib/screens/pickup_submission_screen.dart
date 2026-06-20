@@ -78,6 +78,8 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
   File? _afterPhoto;
   bool _isSubmitting = false;
   String? _error;
+  // True when the error is a lot-resolution failure (shows Refresh Lots button)
+  bool _isLotError = false;
 
   // E6: draft key
   int get _draftKey => widget.routeCustomerId ?? widget.customerId;
@@ -108,8 +110,13 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
 
   Map<String, dynamic> get _cd => widget.customer['customer'] ?? widget.customer;
 
-  String get _customerName =>
-      (_cd['name'] ?? widget.customer['customerName'] ?? '').toString();
+  String get _customerName {
+    // Null-guard: strip trailing " - " or " -" that appears when unitCode is
+    // empty and the name template leaves a dangling separator.
+    final raw = (_cd['name'] ?? widget.customer['customerName'] ?? '').toString().trim();
+    // Remove trailing " -" with optional whitespace
+    return raw.replaceAll(RegExp(r'\s*-\s*$'), '');
+  }
   String get _customerPhone => (_cd['phone'] ?? '').toString();
   String get _customerAddress => (_cd['address'] ?? '').toString();
   String get _mafCode =>
@@ -354,16 +361,19 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
     } on QueueFullException catch (e) {
       setState(() {
         _error = e.message;
+        _isLotError = false;
         _isSubmitting = false;
       });
     } on NoAccessibleLotException catch (e) {
       setState(() {
         _error = e.message;
+        _isLotError = true;
         _isSubmitting = false;
       });
     } catch (e) {
       setState(() {
         _error = e.toString().replaceFirst('Exception: ', '');
+        _isLotError = false;
         _isSubmitting = false;
       });
     }
@@ -509,15 +519,61 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: Colors.red.withOpacity(0.4)),
                   ),
-                  child: Text(_error!,
-                      style: const TextStyle(color: Colors.red)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_error!,
+                          style: const TextStyle(color: Colors.red)),
+                      // Fix B: Offer a self-service refresh when lot resolution fails
+                      if (_isLotError) ...
+                        [
+                          const SizedBox(height: 8),
+                          TextButton.icon(
+                            onPressed: _isSubmitting
+                                ? null
+                                : () async {
+                                    setState(() {
+                                      _isSubmitting = true;
+                                      _error = null;
+                                      _isLotError = false;
+                                    });
+                                    try {
+                                      await lotCache.forceRefresh();
+                                      setState(() => _isSubmitting = false);
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(const SnackBar(
+                                        content: Text(
+                                            'Lot assignments refreshed — try again'),
+                                        backgroundColor: Colors.green,
+                                        duration: Duration(seconds: 3),
+                                      ));
+                                    } catch (e) {
+                                      setState(() {
+                                        _error =
+                                            'Refresh failed: ${e.toString().replaceFirst('Exception: ', '')}';
+                                        _isLotError = true;
+                                        _isSubmitting = false;
+                                      });
+                                    }
+                                  },
+                            icon: const Icon(Icons.refresh,
+                                color: Colors.orange, size: 18),
+                            label: const Text('Refresh Lots',
+                                style: TextStyle(color: Colors.orange)),
+                            style: TextButton.styleFrom(
+                                padding: EdgeInsets.zero),
+                          ),
+                        ],
+                    ],
+                  ),
                 ),
 
               // ── Submit ─────────────────────────────────────────────────────
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: _isSubmitting ? null : _submit,
+                  // Fix C: Disable button when there is a lot-resolution error
+                  onPressed: (_isSubmitting || _isLotError) ? null : _submit,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.orange,
                     minimumSize: const Size(double.infinity, 52),
