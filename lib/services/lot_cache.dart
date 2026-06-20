@@ -157,15 +157,27 @@ class LotCache with WidgetsBindingObserver {
         final cached = int.tryParse(cachedLotNumber.toString());
         if (cached == lotNum) return lot;
       }
-      // Fallback: match by lotCode string, stripping leading zeros on both
-      // sides (e.g. cached "027" and lotNum 27 must match).
-      // This handles the case where lotNumber is null because the admin
-      // dashboard was unreachable during login enrichment.
+      // Fallback 1: direct lotCode == mafCode string match.
+      // Handles prefixed codes like "MOT-027" == "MOT-027".
       final lotCode = lot['lotCode']?.toString() ?? '';
+      if (lotCode.isNotEmpty && lotCode == mafCode) return lot;
+
+      // Fallback 2: strip leading zeros from numeric-only lot codes
+      // (e.g. cached "027" → 27 == lotNum 27).
       if (lotCode.isNotEmpty) {
         final strippedLotCode = lotCode.replaceAll(RegExp(r'^0+'), '');
         final parsedLotCode = int.tryParse(strippedLotCode);
         if (parsedLotCode != null && parsedLotCode == lotNum) return lot;
+      }
+
+      // Fallback 3: extract numeric suffix from prefixed lot codes
+      // (e.g. "MOT-027" → suffix "027" → 27 == lotNum 27).
+      if (lotCode.isNotEmpty) {
+        final lotCodeDigits = RegExp(r'\d+$').firstMatch(lotCode)?.group(0);
+        if (lotCodeDigits != null) {
+          final parsedSuffix = int.tryParse(lotCodeDigits);
+          if (parsedSuffix != null && parsedSuffix == lotNum) return lot;
+        }
       }
     }
 
