@@ -130,7 +130,10 @@ class LotCache with WidgetsBindingObserver {
   /// Algorithm (§3):
   ///   1. Parse the trailing digits from [mafCode] (e.g. "MAF-042" → 42).
   ///   2. Match against cached lots by lotNumber (int comparison).
-  ///   3. On miss, throw [NoAccessibleLotException] — no fallback.
+  ///   3. Fallback: match by lotCode string, stripping leading zeros on both
+  ///      sides before comparing (fixes the case where lotNumber was null due
+  ///      to a silent admin-dashboard enrichment failure at login time).
+  ///   4. On miss, throw [NoAccessibleLotException] — no fallback.
   ///
   /// Returns the full lot map so the caller can read paytWebhook /
   /// monthlyWebhook / lotCode / lotName / lotId / lotNumber.
@@ -148,20 +151,28 @@ class LotCache with WidgetsBindingObserver {
     }
 
     for (final lot in _lots) {
+      // Primary: match by lotNumber (integer field from admin dashboard)
       final cachedLotNumber = lot['lotNumber'];
       if (cachedLotNumber != null) {
         final cached = int.tryParse(cachedLotNumber.toString());
         if (cached == lotNum) return lot;
       }
-      // Fallback: compare against lotCode string (strip leading zeros)
+      // Fallback: match by lotCode string, stripping leading zeros on both
+      // sides (e.g. cached "027" and lotNum 27 must match).
+      // This handles the case where lotNumber is null because the admin
+      // dashboard was unreachable during login enrichment.
       final lotCode = lot['lotCode']?.toString() ?? '';
-      if (int.tryParse(lotCode) == lotNum) return lot;
+      if (lotCode.isNotEmpty) {
+        final strippedLotCode = lotCode.replaceAll(RegExp(r'^0+'), '');
+        final parsedLotCode = int.tryParse(strippedLotCode);
+        if (parsedLotCode != null && parsedLotCode == lotNum) return lot;
+      }
     }
 
     throw NoAccessibleLotException(
         'Lot not found in cache for MAF code "$mafCode" (lotNumber=$lotNum). '
-        'This is an authorisation problem — the supervisor may not have access '
-        'to this lot. Do not fall back to the admin dashboard.');
+        'If you are assigned to this lot, tap "Refresh Lots" to reload your '
+        'lot assignments, then try again.');
   }
 
   // ─── Persistence ─────────────────────────────────────────────────────────────
