@@ -178,6 +178,8 @@ class ApiService {
   static Future<List<dynamic>> getAssignedLots(String surveyToken) async {
     final result = await _get('workerAuth.getAssignedLots', {'surveyToken': surveyToken});
     if (result is List) return result;
+    // Server returns { assignedLots: [...] } — check both keys for forward-compat
+    if (result is Map && result.containsKey('assignedLots')) return result['assignedLots'] as List;
     if (result is Map && result.containsKey('lots')) return result['lots'] as List;
     return [];
   }
