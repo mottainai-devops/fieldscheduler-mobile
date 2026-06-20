@@ -475,7 +475,17 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
     final status = _routeStatus;
     final isCompleted = status == 'completed';
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (didPop) {
+        if (didPop) return;
+        if (context.canPop()) {
+          context.pop();
+        } else {
+          context.go('/home');
+        }
+      },
+      child: Scaffold(
       backgroundColor: AppTheme.bgDark,
       appBar: AppBar(
         backgroundColor: AppTheme.bgCard,
@@ -581,6 +591,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
               label: const Text('Complete Route'),
             )
           : null,
+    ),
     );
   }
 
