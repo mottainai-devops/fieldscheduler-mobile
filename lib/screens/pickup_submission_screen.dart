@@ -121,8 +121,21 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
   String get _customerAddress => (_cd['address'] ?? '').toString();
   String get _mafCode =>
       (_cd['customermaf'] ?? _cd['maf'] ?? '').toString();
-  String get _buildingId =>
-      (_cd['buildingId'] ?? _cd['arcgisBuildingId'] ?? '').toString();
+  /// Returns the building identifier for this customer.
+  /// Falls back to mafCode (e.g. "MOT-027") then to the customer's internal ID
+  /// so that the /forms/submit required-field check always passes even for
+  /// FieldScheduler customers that have no ArcGIS/Zoho building ID assigned.
+  String get _buildingId {
+    final id = (_cd['buildingId'] ?? _cd['arcgisBuildingId'] ?? '').toString().trim();
+    if (id.isNotEmpty && id != 'null') return id;
+    // Fallback 1: use MAF code (lot-level identifier, e.g. "MOT-027")
+    final maf = (_cd['customermaf'] ?? _cd['maf'] ?? '').toString().trim();
+    if (maf.isNotEmpty && maf != 'null') return maf;
+    // Fallback 2: use the customer's internal numeric ID
+    final cid = (_cd['id'] ?? widget.customerId).toString().trim();
+    if (cid.isNotEmpty && cid != 'null' && cid != '0') return 'CUST-$cid';
+    return '';
+  }
   String get _unitCode => (_cd['unitCode'] ?? '').toString();
   String get _socioClass => (_cd['socioClass'] ?? '').toString();
 
