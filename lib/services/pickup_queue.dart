@@ -170,9 +170,11 @@ class PickupQueue extends ChangeNotifier {
             }
           });
 
-          // Attach photos from file paths
-          req.files.add(await http.MultipartFile.fromPath('beforePhoto', beforePath));
-          req.files.add(await http.MultipartFile.fromPath('afterPhoto', afterPath));
+          // Attach photos using field names expected by /forms/submit:
+          // multer only accepts 'firstPhoto' and 'secondPhoto' — any other name
+          // triggers MulterError: Unexpected field (HTTP 500).
+          req.files.add(await http.MultipartFile.fromPath('firstPhoto', beforePath));
+          req.files.add(await http.MultipartFile.fromPath('secondPhoto', afterPath));
 
           final streamed = await req.send();
           final response = await http.Response.fromStream(streamed);
