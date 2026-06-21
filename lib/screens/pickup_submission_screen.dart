@@ -322,6 +322,12 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
       addToPayload('customerAddress', _customerAddress);
       addToPayload('mafCode', _mafCode);
       addToPayload('buildingId', _buildingId);
+      // Send the customer's Zoho contact ID so /forms/submit creates the invoice
+      // against the correct per-customer Zoho contact (not the lot-level contact).
+      final zohoContactId = (_cd['zohoContactId'] ?? '').toString().trim();
+      if (zohoContactId.isNotEmpty && zohoContactId != 'null') {
+        addToPayload('zohoContactId', zohoContactId);
+      }
       addToPayload('unitCode', _unitCode);
       addToPayload('customerType', _customerType);
       addToPayload('socioClass', _socioClass);
