@@ -175,7 +175,7 @@ class PickupQueue extends ChangeNotifier {
           // triggers MulterError: Unexpected field (HTTP 500).
           // contentType must be set explicitly: without it, http package sends
           // 'application/octet-stream' which fails multer's image-only fileFilter.
-          final imageType = http_parser.MediaType('image', 'jpeg');
+          final imageType = MediaType('image', 'jpeg');
           req.files.add(await http.MultipartFile.fromPath(
             'firstPhoto', beforePath, contentType: imageType));
           req.files.add(await http.MultipartFile.fromPath(
