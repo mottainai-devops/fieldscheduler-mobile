@@ -143,13 +143,22 @@ class PickupQueue extends ChangeNotifier {
 
         try {
           final payload = jsonDecode(payloadJson) as Map<String, dynamic>;
-          final uri = Uri.parse(webhookUrl);
+
+          // The Survey App backend expects submissions at /forms/submit with the
+          // webhook URL passed as the `formId` field — NOT as the POST target URI.
+          // Posting directly to the webhook URL returns 404 (Route not found).
+          // See: https://upwork.kowope.xyz/forms/submit (Survey App api_service.dart)
+          const surveyBaseUrl = 'https://upwork.kowope.xyz';
+          final uri = Uri.parse('$surveyBaseUrl/forms/submit');
           final req = http.MultipartRequest('POST', uri);
 
           // Attach Bearer header if token present
           if (token != null && token.isNotEmpty) {
             req.headers['Authorization'] = 'Bearer $token';
           }
+
+          // formId routes the submission to the correct lot/webhook on the backend
+          req.fields['formId'] = webhookUrl;
 
           // Add payload fields with null-omission
           payload.forEach((key, value) {
