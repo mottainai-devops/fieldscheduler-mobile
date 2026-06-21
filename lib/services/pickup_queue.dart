@@ -3,7 +3,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
-
+import 'package:http_parser/http_parser.dart';
 import 'api_service.dart';
 import 'database.dart';
 import 'photo_store.dart';
@@ -173,8 +173,13 @@ class PickupQueue extends ChangeNotifier {
           // Attach photos using field names expected by /forms/submit:
           // multer only accepts 'firstPhoto' and 'secondPhoto' — any other name
           // triggers MulterError: Unexpected field (HTTP 500).
-          req.files.add(await http.MultipartFile.fromPath('firstPhoto', beforePath));
-          req.files.add(await http.MultipartFile.fromPath('secondPhoto', afterPath));
+          // contentType must be set explicitly: without it, http package sends
+          // 'application/octet-stream' which fails multer's image-only fileFilter.
+          final imageType = http_parser.MediaType('image', 'jpeg');
+          req.files.add(await http.MultipartFile.fromPath(
+            'firstPhoto', beforePath, contentType: imageType));
+          req.files.add(await http.MultipartFile.fromPath(
+            'secondPhoto', afterPath, contentType: imageType));
 
           final streamed = await req.send();
           final response = await http.Response.fromStream(streamed);
