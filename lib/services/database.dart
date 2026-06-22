@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 
@@ -33,9 +34,18 @@ class AppDatabase {
     final path = p.join(dbPath, 'fieldworker.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // v2: add UNIQUE index on schedule_cache.route_id for upsert support
+      await db.execute(
+          'CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_cache_route_id ON schedule_cache(route_id)');
+    }
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -181,5 +191,60 @@ class AppDatabase {
     final db = await database;
     await db.delete('pickup_drafts',
         where: 'route_customer_id = ?', whereArgs: [routeCustomerId]);
+  }
+
+  // ── schedule_cache helpers ───────────────────────────────────────────────────
+  // Used by route_detail_screen for offline-first route data.
+  // Keyed on route_id. One row per route; upserted on every successful online fetch.
+
+  /// Persist route + customers JSON for a given routeId.
+  Future<void> upsertRouteCache({
+    required int routeId,
+    required int workerId,
+    required String routeDate,
+    required Map<String, dynamic> routePayload,
+    required List<dynamic> customersPayload,
+  }) async {
+    final db = await database;
+    final payload = jsonEncode({
+      'route': routePayload,
+      'customers': customersPayload,
+    });
+    await db.execute(
+      '''
+      INSERT INTO schedule_cache (worker_id, route_date, route_id, payload_json, cached_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(route_id) DO UPDATE SET
+        worker_id   = excluded.worker_id,
+        route_date  = excluded.route_date,
+        payload_json = excluded.payload_json,
+        cached_at   = excluded.cached_at
+      ''',
+      [workerId, routeDate, routeId, payload, DateTime.now().millisecondsSinceEpoch],
+    );
+  }
+
+  /// Retrieve cached route + customers for a given routeId.
+  /// Returns null if no cache entry exists.
+  Future<({Map<String, dynamic> route, List<dynamic> customers})?> getCachedRoute(
+      int routeId) async {
+    final db = await database;
+    final rows = await db.query(
+      'schedule_cache',
+      where: 'route_id = ?',
+      whereArgs: [routeId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(rows.first['payload_json'] as String)
+          as Map<String, dynamic>;
+      return (
+        route: Map<String, dynamic>.from(decoded['route'] as Map),
+        customers: decoded['customers'] as List<dynamic>,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }
