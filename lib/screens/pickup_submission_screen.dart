@@ -54,14 +54,16 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
   final _incidentController = TextEditingController();
   final _binQtyController = TextEditingController(text: '1');
 
-  // D3: Bin types — 120L Wheelie removed (deprecated, not in tariff matrix)
+  // D3: Canonical bin types — aligned with server normalizeBinType() and Zoho item IDs.
+  // Removed: 120L (deprecated → 240L per 2026-06-22), 360L, Bag, Skip, Container, Other
+  // (no pricing or Zoho item mapping — server rejects those strings with 400).
   static const List<String> _binTypes = [
     'Wheelie Bin 240L',
-    'Wheelie Bin 360L',
-    'Bag',
-    'Skip',
-    'Container',
-    'Other',
+    '1100L Mammoth',
+    '6CBM Skip',
+    '10CBM Skip',
+    '27CBM Dino',
+    '7-11T Compactor',
   ];
 
   static const List<String> _wheelieBinSubTypes = [
