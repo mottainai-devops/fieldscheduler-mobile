@@ -15,12 +15,16 @@ class CustomerDetailScreen extends StatefulWidget {
   final int customerId;
   final String? customerName;
   final int routeId;
+  /// Bug C: pre-loaded customer data from the route cache.
+  /// When provided, used as a fallback if the network call fails (offline mode).
+  final Map<String, dynamic>? cachedCustomer;
 
   const CustomerDetailScreen({
     super.key,
     required this.customerId,
     this.customerName,
     required this.routeId,
+    this.cachedCustomer,
   });
 
   @override
@@ -56,6 +60,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen>
     super.dispose();
   }
 
+  bool _servedFromCache = false;
+
   Future<void> _loadData() async {
     setState(() { _isLoading = true; _error = null; });
     try {
@@ -85,10 +91,38 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen>
           _payments = results[4] as List<dynamic>;
           _linkageStatus = results[5] is Map<String, dynamic> ? results[5] as Map<String, dynamic> : null;
           _isLoading = false;
+          _servedFromCache = false;
         });
       }
     } catch (e) {
-      if (mounted) setState(() { _error = e.toString().replaceFirst('Exception: ', ''); _isLoading = false; });
+      // Bug C: network failed — try the pre-loaded customer data from the route cache.
+      final fallback = widget.cachedCustomer;
+      if (fallback != null) {
+        if (mounted) {
+          setState(() {
+            _customer = fallback;
+            // Supplementary data (invoices, violations, etc.) is not cached —
+            // show empty lists with a banner so the user knows they\'re offline.
+            _invoices = [];
+            _violations = [];
+            _notices = [];
+            _statement = null;
+            _payments = [];
+            _linkageStatus = null;
+            _servedFromCache = true;
+            _isLoading = false;
+          });
+        }
+      } else {
+        // No cache available — show a clear no-data message, not a crash.
+        if (mounted) {
+          setState(() {
+            _error = 'You\'re offline and this customer has no cached data. '
+                'Connect to the internet and try again.';
+            _isLoading = false;
+          });
+        }
+      }
     }
   }
 
@@ -363,9 +397,34 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen>
           ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor))
           : _error != null
               ? _buildError()
-              : TabBarView(
-                  controller: _tabController,
-                  children: [_buildInfoTab(), _buildStatementTab(), _buildInvoicesTab(), _buildPaymentsTab(), _buildComplianceTab(), _buildNotesTab()],
+              : Column(
+                  children: [
+                    // Bug C: offline banner when data came from route cache
+                    if (_servedFromCache)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        color: Colors.orange.shade800,
+                        child: const Row(
+                          children: [
+                            Icon(Icons.offline_bolt, size: 14, color: Colors.white),
+                            SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Offline — showing cached info. Invoices, violations and statements require a connection.',
+                                style: TextStyle(color: Colors.white, fontSize: 11),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    Expanded(
+                      child: TabBarView(
+                        controller: _tabController,
+                        children: [_buildInfoTab(), _buildStatementTab(), _buildInvoicesTab(), _buildPaymentsTab(), _buildComplianceTab(), _buildNotesTab()],
+                      ),
+                    ),
+                  ],
                 ),
       bottomNavigationBar: Builder(
         builder: (context) {

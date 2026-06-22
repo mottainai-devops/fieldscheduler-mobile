@@ -5,6 +5,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
+import '../services/database.dart';
 import '../utils/theme.dart';
 import 'customer_detail_screen.dart';
 import 'optimized_route_screen.dart';
@@ -36,6 +37,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
   final Set<int> _pickedCustomerIds = {};
   final Set<int> _skippedCustomerIds = {};
   bool _isCompletingRoute = false;
+  bool _servedFromCache = false; // Bug C: true when route data came from local SQLite cache
 
   // Area D: Handoff request state — button is disabled once submitted.
   bool _handoffSubmitted = false;
@@ -204,6 +206,13 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
   ];
 
   Future<void> _skipCustomer(Map<String, dynamic> customer) async {
+    if (!_isOnline) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('You\'re offline — skipping a customer requires a network connection.'),
+        backgroundColor: Colors.orange,
+      ));
+      return;
+    }
     final id = _extractCustomerId(customer);
     if (id == 0) return;
     final cd = customer['customer'] ?? customer;
@@ -309,6 +318,13 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
   }
 
   Future<void> _toggleCustomerComplete(int customerId) async {
+    if (!_isOnline) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('You\'re offline — marking stops requires a network connection.'),
+        backgroundColor: Colors.orange,
+      ));
+      return;
+    }
     final wasCompleted = _completedCustomerIds.contains(customerId);
     setState(() {
       if (wasCompleted) {
@@ -523,6 +539,21 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
           ),
+          // Bug C: show "Cached" badge when route data came from local SQLite cache
+          if (_servedFromCache)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Chip(
+                avatar: const Icon(Icons.offline_bolt, size: 13, color: Colors.white),
+                label: const Text(
+                  'Cached',
+                  style: TextStyle(color: Colors.white, fontSize: 10),
+                ),
+                backgroundColor: Colors.orange.shade700,
+                padding: EdgeInsets.zero,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
           // Status badge
           Padding(
             padding: const EdgeInsets.only(right: 2),

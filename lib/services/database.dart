@@ -97,6 +97,9 @@ class AppDatabase {
         cached_at     INTEGER NOT NULL
       )
     ''');
+    // v2: UNIQUE index on route_id to support ON CONFLICT upsert in upsertRouteCache.
+    await db.execute(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_cache_route_id ON schedule_cache(route_id)');
   }
 
   // ── pending_pickups helpers ──────────────────────────────────────────────────
