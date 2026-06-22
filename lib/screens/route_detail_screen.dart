@@ -66,11 +66,17 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
     }
   }
 
+  // Bug C fix: offline-first _loadData.
+  // 1. Try network → on success write to SQLite schedule_cache.
+  // 2. On any network error → read from schedule_cache.
+  // 3. Cache miss → show clear "no cached data" message (no hostname crash).
   Future<void> _loadData() async {
     setState(() {
       _isLoading = true;
       _error = null;
     });
+
+    // ── Step 1: Try network ──────────────────────────────────────────────────
     try {
       final results = await Future.wait([
         ApiService.getRouteById(widget.routeId),
@@ -79,46 +85,85 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
       final route = results[0] as Map<String, dynamic>;
       final customers = results[1] as List<dynamic>;
 
-      // Pre-populate completedCustomerIds, pickedCustomerIds, skippedCustomerIds from server data
-      final completed = <int>{};
-      final picked = <int>{};
-      final skipped = <int>{};
-      for (final c in customers) {
-        final raw = c['customerId'] ?? c['id'];
-        if (raw != null) {
-          final id = raw is int ? raw : int.tryParse(raw.toString()) ?? 0;
-          if (id > 0) {
-            if (c['completedAt'] != null) completed.add(id);
-            if (c['pickedAt'] != null) picked.add(id);
-            // completionType='skipped' set by Tranche 0 Item 3
-            if (c['completionType'] == 'skipped') skipped.add(id);
-          }
-        }
+      // Write to local cache so this route is available offline.
+      try {
+        final db = AppDatabase.instance;
+        final auth = mounted ? context.read<AuthProvider>() : null;
+        await db.upsertRouteCache(
+          routeId: widget.routeId,
+          workerId: auth?.workerId,
+          routeDate: route['scheduledDate']?.toString(),
+          routePayload: route,
+          customersPayload: customers,
+        );
+      } catch (_) {
+        // Cache write failure is non-fatal — continue with live data.
       }
 
-      if (mounted) {
-        setState(() {
-          _route = route;
-          _customers = customers;
-          _completedCustomerIds.addAll(completed);
-          _pickedCustomerIds.addAll(picked);
-          _skippedCustomerIds.addAll(skipped);
-          _isLoading = false;
-        });
-      }
+      _applyRouteData(route, customers, fromCache: false);
 
       // Area C: Resolve scheduleId once after route data is loaded.
-      // Fire-and-forget — does not block the UI.
-      if (!_scheduleIdResolved) {
-        _resolveScheduleId();
+      if (!_scheduleIdResolved) _resolveScheduleId();
+      return;
+    } catch (networkError) {
+      // ── Step 2: Network failed — try local cache ─────────────────────────
+      try {
+        final db = AppDatabase.instance;
+        final cached = await db.getCachedRoute(widget.routeId);
+        if (cached != null) {
+          _applyRouteData(cached.route, cached.customers, fromCache: true);
+          return;
+        }
+      } catch (_) {
+        // Cache read failure — fall through to error state.
       }
-    } catch (e) {
+
+      // ── Step 3: No cache — show clear message ────────────────────────────
       if (mounted) {
         setState(() {
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = 'No network connection and no cached data for this route.\nConnect to the internet and pull to refresh.';
           _isLoading = false;
         });
       }
+    }
+  }
+
+  /// Apply route + customer data to state, shared by online and cache paths.
+  void _applyRouteData(
+    Map<String, dynamic> route,
+    List<dynamic> customers, {
+    required bool fromCache,
+  }) {
+    final completed = <int>{};
+    final picked = <int>{};
+    final skipped = <int>{};
+    for (final c in customers) {
+      final raw = c['customerId'] ?? c['id'];
+      if (raw != null) {
+        final id = raw is int ? raw : int.tryParse(raw.toString()) ?? 0;
+        if (id > 0) {
+          if (c['completedAt'] != null) completed.add(id);
+          if (c['pickedAt'] != null) picked.add(id);
+          if (c['completionType'] == 'skipped') skipped.add(id);
+        }
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _route = route;
+        _customers = customers;
+        _completedCustomerIds
+          ..clear()
+          ..addAll(completed);
+        _pickedCustomerIds
+          ..clear()
+          ..addAll(picked);
+        _skippedCustomerIds
+          ..clear()
+          ..addAll(skipped);
+        _servedFromCache = fromCache;
+        _isLoading = false;
+      });
     }
   }
 
