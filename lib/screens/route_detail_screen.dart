@@ -817,6 +817,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
                                     customerId: id,
                                     customerName: name,
                                     routeId: widget.routeId,
+                                    cachedCustomer: customer,
                                   ),
                                 ),
                               ),
