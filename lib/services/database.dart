@@ -201,10 +201,11 @@ class AppDatabase {
   // Keyed on route_id. One row per route; upserted on every successful online fetch.
 
   /// Persist route + customers JSON for a given routeId.
+  /// [workerId] and [routeDate] are optional — pass null if not available.
   Future<void> upsertRouteCache({
     required int routeId,
-    required int workerId,
-    required String routeDate,
+    int? workerId,
+    String? routeDate,
     required Map<String, dynamic> routePayload,
     required List<dynamic> customersPayload,
   }) async {
@@ -223,7 +224,7 @@ class AppDatabase {
         payload_json = excluded.payload_json,
         cached_at   = excluded.cached_at
       ''',
-      [workerId, routeDate, routeId, payload, DateTime.now().millisecondsSinceEpoch],
+      [workerId ?? 0, routeDate ?? '', routeId, payload, DateTime.now().millisecondsSinceEpoch],
     );
   }
 
