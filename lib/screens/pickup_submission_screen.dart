@@ -54,9 +54,8 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
   final _incidentController = TextEditingController();
   final _binQtyController = TextEditingController(text: '1');
 
-  // D3: Seven Survey App bin types (§4.1)
+  // D3: Bin types — 120L Wheelie removed (deprecated, not in tariff matrix)
   static const List<String> _binTypes = [
-    'Wheelie Bin 120L',
     'Wheelie Bin 240L',
     'Wheelie Bin 360L',
     'Bag',
@@ -72,7 +71,7 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
 
   static bool _isWheelieType(String t) => t.startsWith('Wheelie Bin');
 
-  String _binType = 'Wheelie Bin 120L';
+  String _binType = 'Wheelie Bin 240L';
   String _wheelieBinType = 'Residential';
   File? _beforePhoto;
   File? _afterPhoto;
