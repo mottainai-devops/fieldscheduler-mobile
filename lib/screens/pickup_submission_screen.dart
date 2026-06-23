@@ -81,6 +81,10 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
   String? _error;
   // True when the error is a lot-resolution failure (shows Refresh Lots button)
   bool _isLotError = false;
+  // Item 1b (Tranche 5B): socio-class override for PAYT residential customers.
+  // null = not yet selected (customer data has no socioClass and user hasn't picked one).
+  // Non-null = either from customer data or user selection.
+  String? _socioClassOverride;
 
   // E6: draft key
   int get _draftKey => widget.routeCustomerId ?? widget.customerId;
@@ -92,6 +96,11 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
   void initState() {
     super.initState();
     _rehydrateDraft();
+    // Item 1b: seed _socioClassOverride from customer data if present.
+    final sc = (_cd['socioClass'] ?? '').toString().trim().toLowerCase();
+    if (sc == 'low' || sc == 'medium' || sc == 'high') {
+      _socioClassOverride = sc;
+    }
     // Listen to form field changes for auto-save
     _incidentController.addListener(_scheduleDraftSave);
     _binQtyController.addListener(_scheduleDraftSave);
@@ -138,7 +147,8 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
     return '';
   }
   String get _unitCode => (_cd['unitCode'] ?? '').toString();
-  String get _socioClass => (_cd['socioClass'] ?? '').toString();
+  // Item 1b: use override (user selection or customer data) when available.
+  String get _socioClass => _socioClassOverride ?? (_cd['socioClass'] ?? '').toString();
 
   String get _customerType =>
       (_cd['customerType'] ?? _cd['billingType'] ?? _cd['type'] ?? '').toString();
@@ -261,7 +271,18 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
       setState(() => _error = 'After photo is required');
       return;
     }
-
+    // Item 1b (Tranche 5B): PAYT residential pickups require an explicit socio-class.
+    // Fixed Billing / Monthly Billing customers are exempt (price set by tariff).
+    final ctL = _customerType.toLowerCase();
+    final isPaytResidential = (ctL.contains('payt') || ctL.contains('residential')) &&
+        !ctL.contains('monthly') &&
+        !ctL.contains('fixed') &&
+        !ctL.contains('business') &&
+        !ctL.contains('commercial');
+    if (isPaytResidential && _socioClass.isEmpty) {
+      setState(() => _error = 'Socio-Economic Class is required for PAYT residential pickups. Please select Low, Medium, or High.');
+      return;
+    }
     setState(() {
       _isSubmitting = true;
       _error = null;
@@ -431,8 +452,64 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
                 _infoRow('Building ID', _buildingId),
               if (_customerType.isNotEmpty)
                 _infoRow('Customer Type', _customerType),
-              if (_socioClass.isNotEmpty)
-                _infoRow('Socio Class', _socioClass),
+              // Item 1b (Tranche 5B): show a selector for PAYT residential customers
+              // when socioClass is not already set from customer data.
+              Builder(builder: (context) {
+                final ctL = _customerType.toLowerCase();
+                final isPaytRes = (ctL.contains('payt') || ctL.contains('residential')) &&
+                    !ctL.contains('monthly') && !ctL.contains('fixed') &&
+                    !ctL.contains('business') && !ctL.contains('commercial');
+                if (!isPaytRes) {
+                  // Non-PAYT: just show the value if present
+                  if (_socioClass.isNotEmpty) return _infoRow('Socio Class', _socioClass);
+                  return const SizedBox.shrink();
+                }
+                // PAYT residential: show dropdown selector
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 8),
+                    if (_socioClassOverride == null)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.red.withOpacity(0.5)),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.warning_amber_rounded, color: Colors.red, size: 16),
+                            SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Socio-Economic Class required — select below',
+                                style: TextStyle(color: Colors.red, fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    DropdownButtonFormField<String>(
+                      value: _socioClassOverride,
+                      dropdownColor: AppTheme.bgCard,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: _inputDecoration('Socio-Economic Class *'),
+                      hint: const Text('Select class', style: TextStyle(color: Colors.grey)),
+                      items: const [
+                        DropdownMenuItem(value: 'low', child: Text('LOW', style: TextStyle(color: Colors.white))),
+                        DropdownMenuItem(value: 'medium', child: Text('MEDIUM', style: TextStyle(color: Colors.white))),
+                        DropdownMenuItem(value: 'high', child: Text('HIGH', style: TextStyle(color: Colors.white))),
+                      ],
+                      onChanged: (v) {
+                        setState(() => _socioClassOverride = v);
+                        _scheduleDraftSave();
+                      },
+                    ),
+                  ],
+                );
+              }),
               const SizedBox(height: 20),
 
               // ── Bin Details ────────────────────────────────────────────────
