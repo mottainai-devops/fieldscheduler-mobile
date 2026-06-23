@@ -132,11 +132,15 @@ class _PickupSubmissionScreenState extends State<PickupSubmissionScreen> {
   String get _mafCode =>
       (_cd['customermaf'] ?? _cd['maf'] ?? '').toString();
   /// Returns the building identifier for this customer.
-  /// Item 4 (Tranche 5B): removed mafCode and CUST-id fallbacks.
-  /// If buildingId / arcgisBuildingId is absent, returns empty string so
-  /// _submit can surface a clear error instead of silently using mafCode.
+  /// Item 4 (Tranche 5B): mafCode and CUST-id fallbacks removed.
+  /// arcgisBuildingId fallback also removed (Tranche 5B correction, Pattern #8):
+  /// arcgisBuildingId is PARSED FROM buildingId by the Item 3 migration.
+  /// If buildingId is null, the migration will not have populated arcgisBuildingId
+  /// either, so the fallback can never fire. Carrying both creates coupled-data
+  /// confusion — one is always derived from the other.
+  /// If empty, _submit surfaces a clear error and blocks the submission.
   String get _buildingId {
-    final id = (_cd['buildingId'] ?? _cd['arcgisBuildingId'] ?? '').toString().trim();
+    final id = (_cd['buildingId'] ?? '').toString().trim();
     if (id.isNotEmpty && id != 'null') return id;
     return '';
   }
