@@ -123,6 +123,13 @@ class ApiService {
     return await _get('workerAuth.getAllWorkers', {});
   }
 
+  /// Look up a worker by phone number. Returns null if not found.
+  static Future<Map<String, dynamic>?> getWorkerByPhone(String phone) async {
+    final result = await _get('workerAuth.getByPhone', {'phone': phone});
+    if (result == null) return null;
+    return result as Map<String, dynamic>;
+  }
+
   static Future<Map<String, dynamic>> supervisorLogin({
     required String email,
     required String password, // already base64-encoded by caller
