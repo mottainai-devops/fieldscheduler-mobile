@@ -323,6 +323,7 @@ class ApiService {
     required int violationTypeId,
     required String description,
     required String severity,
+    List<String>? evidenceUrls,
   }) async {
     return await _post('compliance.createViolation', {
       'customerId': customerId,
@@ -330,6 +331,22 @@ class ApiService {
       'violationTypeId': violationTypeId,
       'description': description,
       'severity': severity,
+      if (evidenceUrls != null && evidenceUrls.isNotEmpty) 'evidenceUrls': evidenceUrls,
+    });
+  }
+
+  /// T24 — Upload a single violation photo to S3.
+  /// Requires workerSurveyToken (Bearer). workerId derived server-side from ctx.
+  /// Caller loops for multiple photos; max 5 enforced server-side.
+  static Future<Map<String, dynamic>> uploadViolationPhoto({
+    required String fileData, // base64-encoded image (no data URL prefix)
+    required String fileName,
+    required String fileType, // MIME type e.g. 'image/jpeg'
+  }) async {
+    return await _post('compliance.uploadViolationPhoto', {
+      'fileData': fileData,
+      'fileName': fileName,
+      'fileType': fileType,
     });
   }
 
