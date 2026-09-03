@@ -129,4 +129,37 @@ class AuthProvider extends ChangeNotifier {
     // sessionKind and assignedLots intentionally retained for Tranche 2 queue
     notifyListeners();
   }
+
+  /// APK #52: Used only when Android reports that restored encrypted storage
+  /// can no longer be decrypted with this installation's Keystore material.
+  /// Offline queue records remain intact, but all login and supervisor cache
+  /// markers are removed so routing returns to the clean login screen.
+  Future<void> clearAfterSecureStorageRecovery() async {
+    _workerId = null;
+    _workerName = null;
+    _workerRole = null;
+    _workerEmail = null;
+    _companyId = null;
+    _companyName = null;
+    _sessionKind = SessionKind.none;
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in const [
+      'worker_session',
+      'worker_id',
+      'worker_name',
+      'worker_role',
+      'worker_email',
+      'companyId',
+      'companyName',
+      'sessionKind',
+      'sessionRole',
+      'fieldworkerId',
+      'tokenIssuedAt',
+      'surveyAppUserId',
+      'assignedLots',
+    ]) {
+      await prefs.remove(key);
+    }
+    notifyListeners();
+  }
 }
