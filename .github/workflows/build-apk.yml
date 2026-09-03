@@ -80,8 +80,7 @@ jobs:
         run: flutter pub get
 
       - name: Run tests
-        run: flutter test --no-pub || echo "Tests failed - continuing build"
-        continue-on-error: true
+        run: flutter test --no-pub
 
       - name: Build release APK
         run: |

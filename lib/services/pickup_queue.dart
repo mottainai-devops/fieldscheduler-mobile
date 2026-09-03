@@ -139,7 +139,7 @@ class PickupQueue extends ChangeNotifier {
         final customerId = row['customer_id'] as int;
 
         // E3: Read token LIVE from secure storage at each attempt (C4 fix)
-        final token = await _secureStorage.read(key: 'workerSurveyToken');
+        final token = await ApiService.readSupervisorTokenSafely();
 
         try {
           final payload = jsonDecode(payloadJson) as Map<String, dynamic>;

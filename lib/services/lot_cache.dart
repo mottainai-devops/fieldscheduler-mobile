@@ -99,7 +99,7 @@ class LotCache with WidgetsBindingObserver {
     final now = DateTime.now().millisecondsSinceEpoch;
     if (now - _cachedAt < _refreshThresholdMs) return;
 
-    final token = await _secureStorage.read(key: 'workerSurveyToken');
+    final token = await ApiService.readSupervisorTokenSafely();
     if (token == null || token.isEmpty) return; // not a supervisor session
 
     try {

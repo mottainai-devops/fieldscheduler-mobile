@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../providers/auth_provider.dart';
+import 'secure_storage_recovery.dart';
+import 'trpc_response_decoder.dart';
 
 /// Thrown by the 401 interceptor so callers can distinguish session expiry
 /// from other errors.
@@ -24,6 +26,7 @@ class ApiService {
   static const String workerNameKey = 'worker_name';
 
   static const _secureStorage = FlutterSecureStorage();
+  static const _surveyTokenKey = 'workerSurveyToken';
 
   // ─── Navigator key for 401 redirect ─────────────────────────────────────────
   // Callers must assign this in main() so the interceptor can navigate without
@@ -42,8 +45,8 @@ class ApiService {
   ///   - Supervisor path: surveyToken present → Authorization: Bearer <token>
   ///   - Field manager path: Cookie session present → Cookie: <session>
   static Future<Map<String, String>> _getHeaders() async {
-    // D1: read token live from secure storage on every request
-    final surveyToken = await _secureStorage.read(key: 'workerSurveyToken');
+    // D1: read token live from secure storage on every request.
+    final surveyToken = await readSupervisorTokenSafely();
     if (surveyToken != null && surveyToken.isNotEmpty) {
       return {
         'Content-Type': 'application/json',
@@ -59,6 +62,52 @@ class ApiService {
     };
   }
 
+  /// Returns a supervisor token or makes the app fail closed to clean login
+  /// after a backup-restored encrypted token cannot be decrypted on this device.
+  static Future<String?> readSupervisorTokenSafely() {
+    return readSecureValueOrRecover<String>(
+      read: () => _secureStorage.read(key: _surveyTokenKey),
+      wipeSession: _wipeUnreadableSecureSession,
+      log: debugPrint,
+    );
+  }
+
+  static Future<void> _wipeUnreadableSecureSession() async {
+    await _secureStorage.deleteAll();
+    final context = navigatorKey?.currentContext;
+    var providerCleared = false;
+    if (context != null) {
+      try {
+        await context.read<AuthProvider>().clearAfterSecureStorageRecovery();
+        providerCleared = true;
+      } catch (_) {
+        // The persisted-key cleanup below is the safe fallback when no provider
+        // is mounted yet during app bootstrap.
+      }
+      context.go('/select-worker');
+    }
+    if (!providerCleared) {
+      final prefs = await SharedPreferences.getInstance();
+      for (final key in const [
+        sessionKey,
+        workerIdKey,
+        workerNameKey,
+        'worker_role',
+        'worker_email',
+        'companyId',
+        'companyName',
+        'sessionKind',
+        'sessionRole',
+        'fieldworkerId',
+        'tokenIssuedAt',
+        'surveyAppUserId',
+        'assignedLots',
+      ]) {
+        await prefs.remove(key);
+      }
+    }
+  }
+
   /// Central 401 interceptor.
   ///
   /// B6: On 401:
@@ -70,7 +119,7 @@ class ApiService {
   ///   3. Navigates to /supervisor-login via go_router using the shared
   ///      navigatorKey. Uses context.go() which is go_router-compatible.
   static Future<void> _handle401() async {
-    await _secureStorage.delete(key: 'workerSurveyToken');
+    await _secureStorage.delete(key: _surveyTokenKey);
     // B6: clear in-memory supervisor state via AuthProvider
     final ctx = navigatorKey?.currentContext;
     if (ctx != null) {
@@ -325,7 +374,7 @@ class ApiService {
     required String severity,
     List<String>? evidenceUrls,
   }) async {
-    return await _post('compliance.createViolation', {
+    final result = await _post('compliance.createViolation', {
       'customerId': customerId,
       'routeId': routeId,
       'violationTypeId': violationTypeId,
@@ -333,6 +382,7 @@ class ApiService {
       'severity': severity,
       if (evidenceUrls != null && evidenceUrls.isNotEmpty) 'evidenceUrls': evidenceUrls,
     });
+    return requireMapResponse(result, 'compliance.createViolation');
   }
 
   /// T24 — Upload a single violation photo to S3.
@@ -343,11 +393,12 @@ class ApiService {
     required String fileName,
     required String fileType, // MIME type e.g. 'image/jpeg'
   }) async {
-    return await _post('compliance.uploadViolationPhoto', {
+    final result = await _post('compliance.uploadViolationPhoto', {
       'fileData': fileData,
       'fileName': fileName,
       'fileType': fileType,
     });
+    return requireMapResponse(result, 'compliance.uploadViolationPhoto');
   }
 
   // ─── Payments ────────────────────────────────────────────────────────────────
