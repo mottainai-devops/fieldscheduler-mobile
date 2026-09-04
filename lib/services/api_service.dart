@@ -27,6 +27,8 @@ class ApiService {
 
   static const _secureStorage = FlutterSecureStorage();
   static const _surveyTokenKey = 'workerSurveyToken';
+  static const _phonePinSessionKey = 'phonePinWorkerSession';
+  static const _phonePinSessionHeader = 'X-Field-Worker-Session';
 
   // ─── Navigator key for 401 redirect ─────────────────────────────────────────
   // Callers must assign this in main() so the interceptor can navigate without
@@ -42,8 +44,8 @@ class ApiService {
   /// re-login the very next request carries the fresh token.
   ///
   /// Branching:
-  ///   - Supervisor path: surveyToken present → Authorization: Bearer <token>
-  ///   - Field manager path: Cookie session present → Cookie: <session>
+  ///   - Supervisor path: Survey token → Authorization: Bearer <token>
+  ///   - Phone/PIN path: server-issued credential → X-Field-Worker-Session
   static Future<Map<String, String>> _getHeaders() async {
     // D1: read token live from secure storage on every request.
     final surveyToken = await readSupervisorTokenSafely();
@@ -53,20 +55,36 @@ class ApiService {
         'Authorization': 'Bearer $surveyToken',
       };
     }
-    // Field manager path — Cookie session
-    final prefs = await SharedPreferences.getInstance();
-    final session = prefs.getString(sessionKey) ?? '';
-    return {
-      'Content-Type': 'application/json',
-      if (session.isNotEmpty) 'Cookie': session,
-    };
+    final phonePinSession = await readPhonePinSessionSafely();
+    return buildPhonePinHeaders(phonePinSession);
   }
+
+  /// Kept pure for transport-level regression coverage. The server header is
+  /// intentionally distinct from a Survey bearer token and legacy cookies.
+  static Map<String, String> buildPhonePinHeaders(String? phonePinSession) => {
+        'Content-Type': 'application/json',
+        if (phonePinSession != null && phonePinSession.isNotEmpty)
+          _phonePinSessionHeader: phonePinSession,
+      };
+
+  static String loginRouteForSessionKind(String? sessionKind) =>
+      sessionKind == 'supervisor' ? '/supervisor-login' : '/select-worker';
 
   /// Returns a supervisor token or makes the app fail closed to clean login
   /// after a backup-restored encrypted token cannot be decrypted on this device.
   static Future<String?> readSupervisorTokenSafely() {
     return readSecureValueOrRecover<String>(
       read: () => _secureStorage.read(key: _surveyTokenKey),
+      wipeSession: _wipeUnreadableSecureSession,
+      log: debugPrint,
+    );
+  }
+
+  /// Decrypt failures use the same APK #52 recovery path as the Survey token,
+  /// ensuring a backup-restored phone/PIN session cannot survive a keystore mismatch.
+  static Future<String?> readPhonePinSessionSafely() {
+    return readSecureValueOrRecover<String>(
+      read: () => _secureStorage.read(key: _phonePinSessionKey),
       wipeSession: _wipeUnreadableSecureSession,
       log: debugPrint,
     );
@@ -108,26 +126,22 @@ class ApiService {
     }
   }
 
-  /// Central 401 interceptor.
-  ///
-  /// B6: On 401:
-  ///   1. Clears ONLY the surveyToken from secure storage. SharedPreferences
-  ///      (sessionKind, assignedLots, pending queue) is intentionally preserved
-  ///      so Tranche 2 offline queue state survives.
-  ///   2. Calls clearIdentityOnly() on AuthProvider so in-memory supervisor
-  ///      state is cleared (sessionKind still says 'supervisor' until this runs).
-  ///   3. Navigates to /supervisor-login via go_router using the shared
-  ///      navigatorKey. Uses context.go() which is go_router-compatible.
+  /// Central 401 interceptor. It clears only the active login mode's secure
+  /// credential. Phone/PIN expiry returns to worker selection; supervisor
+  /// Survey-bearer expiry keeps the established supervisor-login route.
   static Future<void> _handle401() async {
-    await _secureStorage.delete(key: _surveyTokenKey);
-    // B6: clear in-memory supervisor state via AuthProvider
+    final prefs = await SharedPreferences.getInstance();
+    final sessionKind = prefs.getString('sessionKind');
+    final isSupervisor = sessionKind == 'supervisor';
+    await _secureStorage.delete(
+      key: isSupervisor ? _surveyTokenKey : _phonePinSessionKey,
+    );
     final ctx = navigatorKey?.currentContext;
     if (ctx != null) {
       try {
         ctx.read<AuthProvider>().clearIdentityOnly();
       } catch (_) {}
-      // B6: navigate to supervisor-login using go_router-compatible go()
-      ctx.go('/supervisor-login');
+      ctx.go(loginRouteForSessionKind(sessionKind));
     }
     throw const SessionExpiredException('Session expired, please sign in again');
   }
@@ -184,10 +198,14 @@ class ApiService {
     required String password, // already base64-encoded by caller
   }) async {
     // Uses supervisorLogin (mutation) — returns {surveyToken, worker, assignedLots}
-    return await _post('workerAuth.supervisorLogin', {
+    final result = await _post('workerAuth.supervisorLogin', {
       'email': email,
       'password': password,
     });
+    // Prevent an old field-manager session being used if the supervisor token
+    // is later cleared or expires.
+    await _secureStorage.delete(key: _phonePinSessionKey);
+    return result;
   }
 
   static Future<Map<String, dynamic>> loginWithPin(int workerId, String pin) async {
@@ -200,6 +218,13 @@ class ApiService {
     if (data['success'] != true) {
       throw Exception(data['message'] ?? 'Invalid PIN');
     }
+    final phonePinSession = data['phonePinSession'];
+    if (phonePinSession is! String || phonePinSession.isEmpty) {
+      throw Exception('Phone/PIN session could not be established');
+    }
+    // A field-manager session must never inherit a prior supervisor identity.
+    await _secureStorage.delete(key: _surveyTokenKey);
+    await _secureStorage.write(key: _phonePinSessionKey, value: phonePinSession);
     return data;
   }
 
@@ -211,6 +236,7 @@ class ApiService {
   }
 
   static Future<void> clearSession() async {
+    await _secureStorage.delete(key: _phonePinSessionKey);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(sessionKey);
     await prefs.remove(workerIdKey);
